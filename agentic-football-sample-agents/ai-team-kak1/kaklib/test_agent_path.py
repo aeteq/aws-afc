@@ -152,6 +152,33 @@ fa.decide_sync(chat_gs, 0, 3)
 check("untagged latest message is dropped", asked[-1]["COACH"] == ["kak1 hold"])
 
 
+# 3b. code decides who presses
+ps = state(holder=2)
+ps["ball"].update(position={"x": -14.5, "y": 0, "z": 0}, possessionAgentId=None, isFree=True)  # next to our MID
+check("nearest outfielder may press", t.may_press(ps, 0, 2))
+check("far forward may not press", not t.may_press(ps, 0, 4))
+check("GK never presses", not t.may_press(ps, 0, 0))
+ps["ball"]["position"] = {"x": 30, "y": 0, "z": 0}
+check("DEF never presses in their half", not t.may_press(ps, 0, 1))
+
+
+class PressAgent:
+    def __call__(self, msg):
+        return '[{"commandType":"PRESS_BALL","parameters":{"intensity":0.9}}]'
+
+    def cancel(self):
+        pass
+
+
+fa._new_agent = lambda role, pid: PressAgent()
+far = state(holder=2)
+far["ball"].update(position={"x": -14.5, "y": 0, "z": 0}, possessionAgentId=None, isFree=True)
+out = fa.decide_sync(far, 0, 4)
+check("model PRESS_BALL by a far player is overridden", logs[-1]["src"] == "override_press" and out[0]["commandType"] != "PRESS_BALL")
+fa.decide_sync(far, 0, 2)
+check("model PRESS_BALL by the nearest player is kept", logs[-1]["src"] == "llm")
+
+
 # 4. player selection from myPlayers
 class FakeApp:
     class logger:

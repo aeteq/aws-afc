@@ -216,7 +216,12 @@ async def decide(game_state, team_id, pid):
                 raise
             raw = await asyncio.wait_for(asyncio.wrap_future(fut), TIMEOUT_S)
             got = _validate(_raw_command(raw), team_id, pid, f["hasBall"])
-            source, out = ("llm", got) if got else ("fallback_invalid", fallback)
+            if not got:
+                source = "fallback_invalid"
+            elif got[0]["commandType"] == "PRESS_BALL" and not tactics.may_press(game_state, team_id, pid):
+                source = "override_press"           # code decides who presses
+            else:
+                source, out = "llm", got
         except asyncio.TimeoutError:
             source = "fallback_timeout"
             try:

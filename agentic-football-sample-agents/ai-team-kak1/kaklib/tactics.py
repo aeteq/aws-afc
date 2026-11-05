@@ -475,6 +475,21 @@ def decide(game_state, team_id, player_id, adaptive=True, force=None):
     return _defend(v)
 
 
+def may_press(game_state, team_id, player_id):
+    """Who is allowed to PRESS_BALL. Stops the 'ball magnet' (in practice match 1 the model
+    sent PRESS_BALL 152 times out of ~390 outfield commands, DEF 42 times).
+    Allowed: our outfield player nearest the ball; also the second nearest when chasing.
+    The DEF never presses in the opponent's half."""
+    v = View(game_state, team_id, player_id, adaptive=False)
+    if v.me is None or v.pid == 0:
+        return False
+    if v.role == "DEF" and (v.ball[0] * v.s) > 0:
+        return False
+    order = sorted((i for i in v.mates if i != 0), key=lambda i: _d(_pos(v.mates[i]), v.ball))
+    rank = order.index(v.pid) if v.pid in order else 99
+    return rank == 0 or (rank == 1 and v.mode == "chase")
+
+
 def facts(game_state, team_id, player_id):
     """Pre-computed facts for the LLM prompt (code does the maths, the model judges)."""
     v = View(game_state, team_id, player_id)
