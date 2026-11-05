@@ -708,6 +708,12 @@ def facts(game_state, team_id, player_id):
 COACH_VERSION = None
 COACH_PROMPT_RULES = []
 COACH_APPLIED = {}
+# Only these may be overridden (= tools/coach.py BOUNDS). Never scaling, match length etc.
+COACH_ALLOWED = {
+    "SHOOT_RANGE.FWD", "SHOOT_RANGE.MID", "SHOOT_RANGE.DEF", "CHASE_SHOOT_BONUS",
+    "KEEPER_OUT_SHOOT_BONUS", "OWN_BOX", "DEF_THIRD", "PRESSURE_DIST", "PRESSED_DIST",
+    "GROUND_LANE_MIN", "GROUND_DIST_MAX", "SPRINT_MIN_STAMINA",
+}
 
 
 def _load_coach_config(path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "coach_config.json")):
@@ -725,7 +731,8 @@ def _load_coach_config(path=os.path.join(os.path.dirname(os.path.abspath(__file_
         return
     g = globals()
     for name, value in (cfg.get("params") or {}).items():
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
+        if name not in COACH_ALLOWED or not isinstance(value, (int, float)) or isinstance(value, bool):
+            log.warning(f"coach_config: skipped {name}={value!r} (not allowed or not a number)")
             continue
         base, _, key = str(name).partition(".")
         cur = g.get(base)

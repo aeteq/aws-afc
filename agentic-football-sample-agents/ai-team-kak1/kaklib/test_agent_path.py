@@ -328,13 +328,16 @@ saved = {k: _copy.deepcopy(getattr(t, k)) for k in ("SHOOT_RANGE", "OWN_BOX", "P
 try:
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
         json.dump({"version": "c-test", "params": {"SHOOT_RANGE.FWD": 30, "OWN_BOX": 999, "PRESSURE_DIST": "x",
-                                                    "NOT_A_PARAM": 3, "SHOOT_RANGE.NOPE": 1},
+                                                    "NOT_A_PARAM": 3, "SHOOT_RANGE.NOPE": 1,
+                                                    "PITCH_HALF_X": 55, "MATCH_SECONDS": 300},
                    "prompt_rules": ["Prefer lofted passes under pressure.", 7]}, fh)
     t._load_coach_config(fh.name)
     check("coach: SHOOT_RANGE.FWD overridden", t.SHOOT_RANGE["FWD"] == 30)
     check("coach: OWN_BOX clamped to +50%", t.OWN_BOX == saved["OWN_BOX"] * 1.5)
     check("coach: non-numeric and unknown params ignored",
           t.PRESSURE_DIST == saved["PRESSURE_DIST"] and "NOT_A_PARAM" not in t.COACH_APPLIED and "NOPE" not in t.SHOOT_RANGE)
+    check("coach: scaling and match length can't be overridden",
+          t.PITCH_HALF_X == 55.0 and "PITCH_HALF_X" not in t.COACH_APPLIED and "MATCH_SECONDS" not in t.COACH_APPLIED)
     check("coach: version and string rules kept", t.COACH_VERSION == "c-test" and t.COACH_PROMPT_RULES == ["Prefer lofted passes under pressure."])
     with open(fh.name, "w") as bad:
         bad.write("{not json")
