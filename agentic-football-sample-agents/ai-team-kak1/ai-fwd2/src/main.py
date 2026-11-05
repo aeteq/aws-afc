@@ -12,7 +12,7 @@ for p in ("../../../lib",      # local: shared workshop lib
 
 os.environ.setdefault("MODEL_ID", "us.amazon.nova-micro-v1:0")
 os.environ.setdefault("LLM_TIMEOUT_MS", "1500")   # tick is ~2 s, server limit 5 s (docs disagree: ~500 ms)
-os.environ.setdefault("USE_MODEL", "0")           # 1 = ask Nova Micro when no hard rule decides
+os.environ.setdefault("USE_MODEL", "choice")      # 0 = rules only; choice = model picks among code options on the ball (A/B, practice 3)
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp  # noqa: E402
 from fast_agent import create_handler  # noqa: E402
