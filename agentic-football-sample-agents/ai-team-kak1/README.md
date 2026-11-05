@@ -63,4 +63,4 @@ Then paste the 5 `kak1_*` Runtime ARNs into My Team.
 
 ## Reading the logs
 
-Each decision logs `{"pid","src","ms","cmd","tick","raw"}`. `src`: `rule`, `llm`, `fallback_timeout`, `fallback_invalid`, `fallback_zone`, `override_<command>` (press/shoot policy), `fallback_busy`, `fallback_error:*`. The first call per agent also logs `payload_check` (the real payload's keys).
+Each decision logs `{"pid","src","ms","cmd","tick","params","t","me","ball","owner","team","score","raw"}` (positions are rounded, `me`/`ball` as [x, y]). `src`: `rule`, `llm`, `fallback_timeout`, `fallback_invalid`, `fallback_zone`, `override_<command>` (press/shoot policy), `fallback_busy`, `fallback_error:*`. The first call per agent also logs `payload_check` (the real payload's keys).

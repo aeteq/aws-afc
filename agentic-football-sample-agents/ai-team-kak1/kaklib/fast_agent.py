@@ -236,6 +236,17 @@ def _validate(raw_cmd, team_id, pid, has_ball):
 _seen_payload = False
 
 
+def _where(game_state, team_id, pid):
+    """Positions for the decision log, so a bad match can be replayed from the logs."""
+    try:
+        f = tactics.facts(game_state, team_id, pid) or {}
+        return {"t": round(game_state.get("gameTime") or 0), "me": f.get("me"), "ball": f.get("ball"),
+                "owner": f.get("ballOwner"), "team": team_id,
+                "score": game_state.get("score")}
+    except Exception:  # logging must never break a decision
+        return {}
+
+
 class _Busy(Exception):
     pass
 
@@ -283,6 +294,7 @@ async def decide(game_state, team_id, pid):
             source = f"fallback_error:{type(e).__name__}"
     log.info(json.dumps({"pid": pid, "src": source, "ms": round((time.perf_counter() - t0) * 1000),
                          "cmd": out[0]["commandType"], "tick": game_state.get("tick"),
+                         "params": out[0].get("parameters"), **_where(game_state, team_id, pid),
                          "raw": (raw or "")[:120]}))
     return out
 
