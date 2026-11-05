@@ -19,7 +19,8 @@ ai-team-kak1/kaklib/coach_config.json (versioned, with its sources) for tactics.
 Nothing deploys from here: run bench.py and review the diff, then deploy as usual.
 
 Needs: pip install "anthropic[bedrock]", and Bedrock access to the model in the account
-(--profile / AWS_PROFILE). Costs one Opus call per run (a few cents).
+(--profile / AWS_PROFILE). Uses bedrock-runtime InvokeModel by default (--client mantle for the
+Messages-API endpoint). Costs one Opus call per run (a few cents).
 """
 
 from __future__ import annotations
@@ -41,8 +42,11 @@ import mine_examples  # noqa: E402
 
 TACTICS = os.path.join(HERE, "..", "ai-team-kak1", "kaklib", "tactics.py")
 CONFIG = os.path.join(HERE, "..", "ai-team-kak1", "kaklib", "coach_config.json")
-MODEL = "anthropic.claude-opus-5-5"
-FALLBACK_MODEL = "anthropic.claude-opus-4-8"
+# The Workshop role can't create the Marketplace subscription the Mantle endpoint needs, but
+# bedrock-runtime InvokeModel works with the cross-region inference profiles (checked 2026-11-05:
+# us.anthropic.claude-opus-5-5, sonnet-5-5, haiku-5-5, opus-4-8 answer).
+MODEL = "us.anthropic.claude-opus-5-5"
+FALLBACK_MODEL = "us.anthropic.claude-opus-4-8"
 MAX_CHANGES, MAX_STEP = 3, 0.25
 
 # name -> (low, high, meaning). Distances are documented-pitch units (live x ~7.9).
@@ -185,23 +189,47 @@ def clamp(changes, values):
     return out, notes
 
 
-def ask_claude(system, user, profile, region):
-    from anthropic import AnthropicBedrockMantle, BetaFallbackState, BetaRefusalFallbackMiddleware
-    client = AnthropicBedrockMantle(
-        aws_region=region, aws_profile=profile,
-        middleware=[BetaRefusalFallbackMiddleware([{"model": FALLBACK_MODEL}])])
+def _client(kind, profile, region):
+    from anthropic import AnthropicBedrock, AnthropicBedrockMantle, BetaRefusalFallbackMiddleware
+    cls = AnthropicBedrockMantle if kind == "mantle" else AnthropicBedrock
+    return cls(aws_region=region, aws_profile=profile,
+               middleware=[BetaRefusalFallbackMiddleware([{"model": FALLBACK_MODEL}])])
+
+
+def _json_from_text(text):
+    i, j = text.find("{"), text.rfind("}")
+    return json.loads(text[i:j + 1])
+
+
+def ask_claude(system, user, profile, region, model=MODEL, kind="bedrock"):
+    import anthropic
+    from anthropic import BetaFallbackState
+    client = _client(kind, profile, region)
+    params = dict(model=model, max_tokens=16000, system=system,
+                  messages=[{"role": "user", "content": user}])
     with BetaFallbackState():
-        msg = client.beta.messages.create(
-            model=MODEL, max_tokens=16000, system=system,
-            messages=[{"role": "user", "content": user}],
-            output_config={"effort": "high",
-                           "format": {"type": "json_schema", "schema": SCHEMA}})
+        try:
+            msg = client.beta.messages.create(
+                **params, output_config={"effort": "high",
+                                         "format": {"type": "json_schema", "schema": SCHEMA}})
+        except anthropic.BadRequestError as e:
+            # Some Bedrock deployments reject structured outputs: ask for the JSON in words.
+            print(f"structured output rejected ({e.status_code}); retrying with a JSON instruction",
+                  file=sys.stderr)
+            params["system"] = system + ("\n\nReply with ONLY a JSON object matching this schema, "
+                                         "no other text:\n" + json.dumps(SCHEMA))
+            msg = client.beta.messages.create(**params, output_config={"effort": "high"})
     if msg.stop_reason == "refusal":
         sys.exit(f"model refused: {getattr(msg, 'stop_details', None)}")
     if msg.stop_reason == "max_tokens":
         sys.exit("answer cut off at max_tokens")
     text = next(b.text for b in msg.content if b.type == "text")
-    return json.loads(text), msg.model
+    ans = _json_from_text(text)
+    for k in ("summary", "changes", "prompt_rules", "watch"):
+        ans.setdefault(k, [] if k != "summary" else "")
+    ans["changes"] = [c for c in ans["changes"] if isinstance(c, dict) and c.get("param") in BOUNDS
+                      and isinstance(c.get("value"), (int, float))]
+    return ans, msg.model
 
 
 def main():
@@ -210,6 +238,10 @@ def main():
     ap.add_argument("--match", default="-1", help="index among full matches, or 'all' (default: last)")
     ap.add_argument("--profile", default=os.getenv("AWS_PROFILE"))
     ap.add_argument("--region", default=os.getenv("AWS_REGION", "us-east-1"))
+    ap.add_argument("--model", default=MODEL, help=f"Bedrock model or inference profile (default {MODEL})")
+    ap.add_argument("--client", choices=("bedrock", "mantle"), default="bedrock",
+                    help="bedrock = bedrock-runtime InvokeModel (works in the Workshop account); "
+                         "mantle = the Messages-API endpoint (needs a Marketplace subscription)")
     ap.add_argument("--dry-run", action="store_true", help="print the prompt and stop")
     ap.add_argument("--write", action="store_true", help=f"write {os.path.relpath(CONFIG)}")
     args = ap.parse_args()
@@ -220,7 +252,7 @@ def main():
     if args.dry_run:
         print(SYSTEM, "\n\n", user)
         return
-    ans, model = ask_claude(SYSTEM, user, args.profile, args.region)
+    ans, model = ask_claude(SYSTEM, user, args.profile, args.region, args.model, args.client)
     changes, notes = clamp(ans["changes"], values)
     result = {"version": dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
               "model": model, "matches": args.match, "summary": ans["summary"],
