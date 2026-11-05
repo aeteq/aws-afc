@@ -101,6 +101,7 @@ def mine(match, source, match_idx):
                 "me": _flip(r.get("me"), s), "ball": _flip(r.get("ball"), s), "mates": mates,
                 "opps": {str(k): _flip(v, s) for k, v in (r.get("opps") or {}).items()} or None,
                 "score": list(score_at(t)), "labels": sorted(labels),
+                "choice": r.get("choice"), "options": r.get("options"),
                 "value": sum(WEIGHTS[x] for x in labels),
             }
             out.append(ex)
@@ -137,6 +138,23 @@ def main():
             print(json.dumps(ex, separators=(",", ":")))
         return
     print(f"{len(examples)} on-ball decisions")
+    asked = [ex for ex in examples if ex.get("options")]
+    if asked:
+        # USE_MODEL=choice: did the model's deviations from the rule's option pay off?
+        print(f"\nModel choice turns: {len(asked)} (the rest: rules, or the model wasn't asked)")
+        groups = {"model picked the rule's option": [ex for ex in asked if ex.get("choice") == "rule"],
+                  "model deviated": [ex for ex in asked if ex.get("choice") not in (None, "rule")],
+                  "no valid pick (fallback)": [ex for ex in asked if ex.get("choice") is None]}
+        for name, xs in groups.items():
+            if not xs:
+                continue
+            c = Counter(l for ex in xs for l in ex["labels"])
+            v = sum(ex["value"] for ex in xs) / len(xs)
+            print(f"  {name:32s} n={len(xs):3d} value {v:+.2f}  " +
+                  ", ".join(f"{l} {n}" for l, n in c.most_common()))
+        picks = Counter(ex.get("choice") for ex in asked)
+        print("  picks: " + ", ".join(f"{k} {n}" for k, n in picks.most_common()))
+        print()
     by = defaultdict(list)
     for ex in examples:
         by[(ex["role"], ex["cmd"], ex["params"].get("type") or ex["params"].get("method") or "")].append(ex)
