@@ -93,8 +93,9 @@ else:
     SIDE = {0: 0.0, 1: 0.0, 2: 1.0, 3: -1.0, 4: 0.0}
 
 # Tunables. Distances are to the opponent goal centre.
-# Live: 7 shots from 33-44 doc units out, 0 goals (Pan's Claude live_report, 3 matches).
-SHOOT_RANGE = {"DEF": 16.0, "MID": 20.0, "FWD": 22.0}
+# Live: our 7 shots from 33-44 doc out scored 0, while The Benchmark scored from 27-35 doc
+# (Pan's Claude live_report, 3 matches). So: not from 40, but 30ish is fine. Bench: no regression.
+SHOOT_RANGE = {"DEF": 20.0, "MID": 30.0, "FWD": 32.0}
 # Shoot on sight. In the sim this broke the 0-0 mirror (10W 6D 0L vs the plain plan).
 # Sim shot physics are guesses: if long shots just give the ball away live, set LONG_SHOTS=0.
 LONG_SHOTS = os.getenv("LONG_SHOTS", "0") == "1"        # off: long shots never scored live
@@ -327,7 +328,7 @@ class View:
             r += CHASE_SHOOT_BONUS
         if self.keeper_out and self.role != "DEF" and self.mode != "protect":
             r += KEEPER_OUT_SHOOT_BONUS
-        return min(r, 26.0)                # past this, shots are just giveaways (live data)
+        return min(r, 36.0)                # past this, shots are just giveaways (live data)
 
     # --- the single press/shoot policy: rules and model are both held to it ---
     def press_allowed(self):

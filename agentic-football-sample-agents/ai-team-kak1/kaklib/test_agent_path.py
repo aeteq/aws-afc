@@ -87,7 +87,9 @@ for p in pr["players"]:
 pr["ball"]["position"] = {"x": fwd["x"] + 0.5, "y": 0, "z": 0}
 check("protect + keeper out: no shot from 31", t.decide(pr, 0, 3)[0]["commandType"] != "SHOOT")
 pr["score"] = {"home": 0, "away": 0}
-check("normal + keeper out: no long shot from 31 (long shots off)", t.decide(pr, 0, 3)[0]["commandType"] != "SHOOT")
+fwd["x"] = 55 - 38
+pr["ball"]["position"] = {"x": fwd["x"] + 0.5, "y": 0, "z": 0}
+check("normal + keeper out: no long shot from 38 (cap 36)", t.decide(pr, 0, 3)[0]["commandType"] != "SHOOT")
 fwd["x"] = 55 - 22
 pr["ball"]["position"] = {"x": fwd["x"] + 0.5, "y": 0, "z": 0}
 check("normal + keeper out: shoots from 22", t.decide(pr, 0, 3)[0]["commandType"] == "SHOOT")
