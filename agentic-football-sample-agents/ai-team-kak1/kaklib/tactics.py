@@ -125,6 +125,10 @@ KEEPER_OUT_SHOOT_BONUS = 4.0
 COMMITTED_ON, COMMITTED_OFF = 3, 1         # their outfielders in our half -> counter
 PRESSED_DIST, PRESSED_COUNT = 8.0, 2       # this many opponents near our carrier -> release long
 STYLES = ("auto", "normal", "counter", "direct", "patient")
+# Auto 'counter' style off: vs the live Nova teams COMMITTED fires because their forwards camp
+# in our half (their doc-scale targets fall off the pitch), not because they push up (scout
+# trainer). The coach can still force it with "kak1 STYLE counter".
+AUTO_COUNTER = False
 # All 10 players (opponents too) hear every coach message, so a STYLE order only counts
 # if the message also contains our tag, e.g. "kak1 STYLE counter". Empty tag = no check.
 COACH_TAG = os.getenv("COACH_TAG", "kak1").lower()
@@ -260,7 +264,7 @@ class View:
         forced = force or _coach_style(self.chat, self.team_id)
         if forced and forced != "auto":
             self.style = forced
-        elif committed:
+        elif committed and AUTO_COUNTER:
             self.style = "counter"
         elif deep:
             self.style = "patient"
@@ -483,6 +487,12 @@ def _on_ball(v):
     # Direct: 2+ opponents on us, release long. Counter: won it in our half, hit the
     # furthest forward before they get back.
     own_half = me[0] * v.s < 0
+    # Safe build-up (scout trainer): the DEF never plays short in our half, he lofts it to the
+    # most advanced mate (live: DEF ground passes lost 7 of 9).
+    if v.role == "DEF" and own_half:
+        t = v.most_advanced_mate(min_lane=1.0)
+        if t is not None:
+            return v.c("PASS", target_player_id=t, type="AERIAL")
     if v.pressed or (v.style == "counter" and own_half):
         t = v.most_advanced_mate()
         if t is not None:
