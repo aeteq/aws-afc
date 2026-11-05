@@ -34,7 +34,11 @@ MODEL_ID = os.getenv("MODEL_ID", "us.amazon.nova-micro-v1:0")
 TIMEOUT_S = int(os.getenv("LLM_TIMEOUT_MS", "1500")) / 1000.0
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "120"))
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
-MAX_INFLIGHT = int(os.getenv("MAX_INFLIGHT", "2"))   # model calls still running in this process
+MAX_INFLIGHT = int(os.getenv("MAX_INFLIGHT", "2"))
+# Model off by default: live, it overrode our shape (ball-magnet presses), ~10% of replies were
+# invalid, and each call adds ~0.4 s model + ~0.6 s platform time on a 2 s tick. Turn it back on
+# (USE_MODEL=1) only if a live A/B shows it helps.
+USE_MODEL = os.getenv("USE_MODEL", "0") == "1"   # model calls still running in this process
 
 # Own pool, not asyncio's default: asyncio.run() would otherwise wait for late calls on exit.
 _POOL = ThreadPoolExecutor(max_workers=MAX_INFLIGHT + 1, thread_name_prefix="llm")
@@ -217,7 +221,8 @@ async def decide(game_state, team_id, pid):
 
     # Final without the model: the goalkeeper (fully coded), and shots.
     # Final without the model: the goalkeeper, shots, and clearing our own box.
-    hard = f and (pid == 0 or fallback[0]["commandType"] == "SHOOT" or (f["hasBall"] and f.get("inOwnBox")))
+    hard = f and (not USE_MODEL or pid == 0 or fallback[0]["commandType"] == "SHOOT"
+                  or (f["hasBall"] and f.get("inOwnBox")))
     if f and not hard:
         msg = json.dumps({"FACTS": f, "SUGGESTION": fallback[0],
                           "COACH": tactics.coach_messages(game_state.get("teamChat"), team_id)[-1:]})

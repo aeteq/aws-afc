@@ -7,6 +7,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, "..", "..", "lib"))   # shared workshop lib
 sys.path.insert(0, _here)
 
+os.environ.setdefault("USE_MODEL", "1")   # these checks exercise the model path
 import fast_agent as fa  # noqa: E402
 import tactics as t
 
@@ -222,6 +223,15 @@ check("model PRESS_BALL by a 3rd-nearest player is overridden",
       logs[-1]["src"] == "override_press_ball" and out[0]["commandType"] != "PRESS_BALL")
 fa.decide_sync(far, 0, 2)
 check("model PRESS_BALL by the nearest player is kept", logs[-1]["src"] == "llm")
+
+
+# 3c. model switch
+fa.USE_MODEL = False
+asked.clear()
+fa._new_agent = lambda role, pid: RecAgent()
+fa.decide_sync(state(holder=2), 0, 3)
+check("USE_MODEL off: rules decide, model not asked", not asked and logs[-1]["src"] == "rule")
+fa.USE_MODEL = True
 
 
 # 4. player selection from myPlayers
