@@ -427,7 +427,7 @@ def ko(score, t_, team=0):
     g["ball"].update(position={"x": -8, "y": 0, "z": 0}, isFree=False, possessionAgentId="agentId_4")
     g["playMode"], g["gameTime"], g["score"] = "KICK_OFF", t_, score
     return g
-t._score_seen.update(t=None, score=None, kicks=None)
+t._score_seen.update(t=None, score=None, kicks=None, goal_t=None)
 check("opening kick-off 0-0: ball treated as loose", t.View(ko({"home": 0, "away": 0}, 0), 0, 4).holder is None)
 t.View(ko({"home": 0, "away": 0}, 40), 0, 4)                       # open play seen at 0-0
 check("after OUR goal (home): their kick-off, ball is theirs",
@@ -436,12 +436,18 @@ check("after THEIR goal: our kick-off, ball is ours",
       t.View(ko({"home": 1, "away": 1}, 60), 0, 4).i_have_ball)
 check("same from the away side: after their (home) goal we kick off",
       t.View(ko({"home": 2, "away": 1}, 80), 1, 4).holder_mine)
-t._score_seen.update(t=None, score=None, kicks=None)
+t._score_seen.update(t=None, score=None, kicks=None, goal_t=None)
 check("cold start mid-match (score not 0-0, no history): loose",
       t.View(ko({"home": 2, "away": 1}, 81), 0, 4).holder is None)
+t._score_seen.update(t=None, score=None, kicks=None, goal_t=None)
+t.View(ko({"home": 0, "away": 0}, 40), 0, 4)
+after = ko({"home": 1, "away": 0}, 42); after["playMode"] = "OPEN_PLAY"     # server didn't say KICK_OFF
+check("score just changed, playMode OPEN_PLAY: still their kick-off", not t.View(after, 0, 4).holder_mine)
+later = ko({"home": 1, "away": 0}, 50); later["playMode"] = "OPEN_PLAY"
+check("8 s after the goal: back to the nearest-candidate rule", t.View(later, 0, 4).i_have_ball)
 g_open = ko({"home": 0, "away": 0}, 50); g_open["playMode"] = "OPEN_PLAY"
 check("open play keeps the nearest-candidate rule", t.View(g_open, 0, 4).i_have_ball)
-t._score_seen.update(t=None, score=None, kicks=None)
+t._score_seen.update(t=None, score=None, kicks=None, goal_t=None)
 
 
 # 6. live match length: protect/chase run in the last 20% of a 120 s match

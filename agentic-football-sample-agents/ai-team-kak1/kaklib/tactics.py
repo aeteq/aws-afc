@@ -31,27 +31,32 @@ SCALE_Y = HALF_Y / PITCH_HALF_Y
 BALL_LATERAL = os.getenv("BALL_LATERAL", "z")
 
 
-_score_seen = {"t": None, "score": None, "kicks": None}   # per process: who kicks off next
+_score_seen = {"t": None, "score": None, "kicks": None, "goal_t": None}   # per process
+KICKOFF_WINDOW_S = 4.0   # after a score change, treat ~2 decisions as kick-off
 
 
 def _kickoff_team(gs):
-    """Team id (0 home, 1 away) that kicks off now: the one that conceded the last goal.
-    None at the opening kick-off (coin toss) or when we haven't seen a goal this match."""
+    """(team id that kicks off now, goal just scored?). The kicking team is the one that
+    conceded the last goal: None at the opening kick-off (coin toss) or when we haven't seen a
+    goal this match. 'Goal just scored' = the score changed within KICKOFF_WINDOW_S."""
     t = gs.get("gameTime") or 0
     sc = gs.get("score") or {}
     score = (sc.get("home", 0), sc.get("away", 0))
     seen = _score_seen
     if seen["t"] is not None and t + 5 < seen["t"]:           # a new match started
-        seen["score"], seen["kicks"] = None, None
+        seen["score"], seen["kicks"], seen["goal_t"] = None, None, None
     if seen["score"] is not None and score != seen["score"]:
-        if score[0] > seen["score"][0]:
-            seen["kicks"] = 1                                  # home scored -> away kicks off
+        if score[0] < seen["score"][0] or score[1] < seen["score"][1]:
+            seen["kicks"], seen["goal_t"] = None, None         # score went down: not the same match
+        elif score[0] > seen["score"][0]:
+            seen["kicks"], seen["goal_t"] = 1, t               # home scored -> away kicks off
         elif score[1] > seen["score"][1]:
-            seen["kicks"] = 0
+            seen["kicks"], seen["goal_t"] = 0, t
     elif seen["score"] is None and score != (0, 0):
         seen["kicks"] = None                                    # joined mid-match (cold start): unknown
     seen["t"], seen["score"] = t, score
-    return seen["kicks"]
+    recent = seen["goal_t"] is not None and 0 <= t - seen["goal_t"] <= KICKOFF_WINDOW_S
+    return seen["kicks"], recent
 
 
 def _ball_flat(d):
@@ -244,8 +249,10 @@ class View:
         self.ball = _pos(ball)
         v = ball.get("velocity", {})
         self.ball_v = (v.get("x", 0.0), v.get("y", 0.0))
-        self.kickoff = gs.get("playMode") == "KICK_OFF"
-        self.kickoff_team = _kickoff_team(gs)
+        self.kickoff_team, recent_goal = _kickoff_team(gs)
+        # Kick-off: the server says so, or a goal went in within the last few seconds (in case
+        # the server sends OPEN_PLAY after goals; the 'pm' log field tells us which is live).
+        self.kickoff = gs.get("playMode") == "KICK_OFF" or recent_goal
         self.holder = self._holder(ball, players)
         self.holder_mine = self.holder is not None and _is_my_team(self.holder, team_id)
         self.i_have_ball = self.holder_mine and _player_idx(self.holder) == pid
