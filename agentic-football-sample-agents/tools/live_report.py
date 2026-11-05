@@ -105,13 +105,14 @@ def report(match, idx):
 
     print("\nCalls and sources per player")
     srcs = sorted({r["src"].split(":")[0] for r in dec})
-    print(f"  {'pid':5s}{'calls':>6s}{'ticks':>7s}  " + "".join(f"{s:>18s}" for s in srcs))
+    w = max([len(s) for s in srcs] + [6]) + 2
+    print(f"  {'pid':7s}{'calls':>6s}{'ticks':>7s}" + "".join(f"{s:>{w}s}" for s in srcs))
     for pid in sorted(by_pid):
         rs = by_pid[pid]
         ticks = {r.get("tick") for r in rs if r.get("tick") is not None}
         cnt = Counter(r["src"].split(":")[0] for r in rs)
-        print(f"  {pid}{ROLE.get(pid, ''):>4s}{len(rs):6d}{len(ticks):7d}  " +
-              "".join(f"{cnt.get(s, 0):18d}" for s in srcs))
+        print(f"  {pid} {ROLE.get(pid, ''):5s}{len(rs):6d}{len(ticks):7d}" +
+              "".join(f"{cnt.get(s, 0):{w}d}" for s in srcs))
     errs = Counter(r["src"] for r in dec if r["src"].startswith("fallback_error"))
     if errs:
         print("  errors: " + ", ".join(f"{k} x{v}" for k, v in errs.most_common()))
@@ -119,7 +120,7 @@ def report(match, idx):
     print("\nCommands per player")
     for pid in sorted(by_pid):
         cnt = Counter(r.get("cmd") for r in by_pid[pid])
-        print(f"  {pid}{ROLE.get(pid, ''):>4s}  " + ", ".join(f"{k} {v}" for k, v in cnt.most_common()))
+        print(f"  {pid} {ROLE.get(pid, ''):5s}" + ", ".join(f"{k} {v}" for k, v in cnt.most_common()))
 
     ms = [r.get("ms") for r in dec if isinstance(r.get("ms"), (int, float))]
     if ms:
