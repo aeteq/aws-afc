@@ -9,6 +9,9 @@ not the server's. Use this to catch tactical mistakes and to compare two version
 team, never as proof of a result on match day.
 
 Coordinates are world coordinates: HOME (team 0) attacks +x, AWAY (team 1) attacks -x.
+
+LiveMatch (bottom of this file, opt-in) plays the same engine but talks to agents in live
+units and uses constants measured from live logs.
 """
 
 from __future__ import annotations
@@ -134,6 +137,16 @@ class MatchResult:
 class Match:
     """One match. Controllers expose commands(game_state, team_id, player_id) -> list[dict]."""
 
+    # Tunables, read through self so LiveMatch can override them. These defaults are the
+    # module constants above, so the default engine plays exactly as before.
+    WALK, RUN, SPRINT = WALK, RUN, SPRINT
+    DRIBBLE_FACTOR = DRIBBLE_FACTOR
+    DRIBBLE_MAX = None          # cap on a carrier's speed (m/s); None = no cap
+    BALL_SPEED = 1.0            # multiplies every kick speed and the speed a player can control
+    BALL_OFFSET = 0.5           # metres the ball sits ahead of its carrier
+    GK_DEPTH = 2.0              # metres off his line a keeper with no order stands
+    FORMATION = FORMATION
+
     def __init__(self, home, away, seed: int = 0, record: bool = False,
                  seconds: float = MATCH_SECONDS, realtime: bool = False):
         self.rng = random.Random(seed)
@@ -214,7 +227,7 @@ class Match:
                     "position": {"x": round(p.x, 2), "y": round(p.y, 2)},
                     "velocity": {"x": round(p.vx, 2), "y": round(p.vy, 2)},
                     "stamina": round(100.0 * p.stamina, 1),  # 0-100, as the server sends it
-                    "isSprinting": math.hypot(p.vx, p.vy) > RUN + 0.1}
+                    "isSprinting": math.hypot(p.vx, p.vy) > self.RUN + 0.1}
                    for p in self.players]
         return {"tick": self.tick, "gameTime": round(self.time, 1), "playMode": "OPEN_PLAY",
                 "score": {"home": self.stats[0].goals, "away": self.stats[1].goals},
@@ -286,14 +299,15 @@ class Match:
             kind = "GROUND" if params.get("method") == "THROW" else "AERIAL"
         d = math.hypot(t.x - p.x, t.y - p.y)
         aerial = kind == "AERIAL"
+        k = self.BALL_SPEED
         if aerial:
-            speed = _clamp(8.0 + 0.5 * d, 12.0, 25.0)
+            speed = _clamp((8.0 + 0.5 * d) * k, 12.0 * k, 25.0 * k)
             flight = d / speed
         else:
             # Kicked to arrive at ~5 m/s. The old 6 + 0.7 d ignored friction: the
             # ball could roll only speed / friction metres in total, so a 20 m pass
             # died at the receiver's feet and was cut out there.
-            speed = _clamp(5.0 + GROUND_FRICTION * d, 8.0, 28.0)
+            speed = _clamp(5.0 * k + GROUND_FRICTION * d, 8.0 * k, 28.0 * k)
             reach = min(GROUND_FRICTION * d / speed, 0.95)
             flight = -math.log(1.0 - reach) / GROUND_FRICTION
         tx, ty = t.x + t.vx * flight, t.y + t.vy * flight            # lead the receiver
@@ -316,7 +330,7 @@ class Match:
         power = _clamp(_num(params.get("power"), 0.8), 0.0, 1.0)
         high = aim.startswith("T")
         sigma = (2.5 + 0.2 * d + (1.0 if high else 0.0)) * (1.4 if self._pressure(p) < 2.0 else 1.0)
-        self._release(p, gx, gy, 12.0 + 18.0 * power, sigma)
+        self._release(p, gx, gy, (12.0 + 18.0 * power) * self.BALL_SPEED, sigma)
         b = self.ball
         b.shot_by, b.shot_low, b.save_tried, b.pass_from, b.pass_to = p.team, not high, False, None, None
         b.shot_from, b.shooter = (p.x, p.y), p.idx
@@ -345,10 +359,12 @@ class Match:
 
     def _move(self, p: Player, target: tuple) -> None:
         tx, ty, pace = target
-        speed = {"stand": 0.0, "walk": WALK, "run": RUN, "sprint": SPRINT}[pace]
+        speed = {"stand": 0.0, "walk": self.WALK, "run": self.RUN, "sprint": self.SPRINT}[pace]
         speed *= 0.6 + 0.4 * p.stamina
         if self.ball.owner is p:
-            speed *= DRIBBLE_FACTOR
+            speed *= self.DRIBBLE_FACTOR
+            if self.DRIBBLE_MAX is not None:
+                speed = min(speed, self.DRIBBLE_MAX)
         dx, dy = tx - p.x, ty - p.y
         d = math.hypot(dx, dy)
         step = min(speed * DT, d)
@@ -359,9 +375,9 @@ class Match:
         else:
             p.vx = p.vy = 0.0
         moving = math.hypot(p.vx, p.vy)
-        if moving > RUN * 0.6 + 0.4 and pace == "sprint":
+        if moving > self.RUN * 0.6 + 0.4 and pace == "sprint":
             p.stamina -= 0.010 * DT
-        elif moving > WALK + 0.1:
+        elif moving > self.WALK + 0.1:
             p.stamina -= 0.0015 * DT
         else:
             p.stamina += 0.006 * DT
@@ -435,14 +451,14 @@ class Match:
                 return p.x, p.y, "stand"
             return s * HALF_X, p.y * 0.8, "run"  # carry it toward goal
         if p.idx == 0:
-            gx = -s * (HALF_X - 2.0)
+            gx = -s * (HALF_X - self.GK_DEPTH)
             return gx, _clamp(b.y * 0.1, -3.0, 3.0), "walk"
         if b.owner is None:
             mates = [q for q in self.players if q.team == p.team and q.idx != 0]
             nearest = min(mates, key=lambda q: math.hypot(q.x - b.x, q.y - b.y))
             if nearest is p and math.hypot(p.x - b.x, p.y - b.y) < 15.0:
                 return b.x, b.y, "run"
-        fx, fy = FORMATION[p.idx]
+        fx, fy = self.FORMATION[p.idx]
         return _clamp(s * fx * 0.5 + b.x * 0.5, -50, 50), s * fy + 0.3 * b.y, "walk"
 
     def _move_ball(self) -> None:
@@ -451,7 +467,7 @@ class Match:
             p = b.owner
             sp = math.hypot(p.vx, p.vy)
             ux, uy = (p.vx / sp, p.vy / sp) if sp > 0.1 else (_side(p.team), 0.0)
-            b.x, b.y, b.vx, b.vy = p.x + 0.5 * ux, p.y + 0.5 * uy, p.vx, p.vy
+            b.x, b.y, b.vx, b.vy = p.x + self.BALL_OFFSET * ux, p.y + self.BALL_OFFSET * uy, p.vx, p.vy
             b.protect = max(0.0, b.protect - DT)
             b.hold += DT
             if p.idx == 0 and b.hold > KEEPER_MAX_HOLD:
@@ -503,14 +519,15 @@ class Match:
                     # A tackler pokes the ball away from his own goal, not into it.
                     forward = 0.0 if o.team == 0 else math.pi
                     a = forward + math.radians(self.rng.uniform(-70.0, 70.0))
-                    b.owner, b.vx, b.vy, b.last_team = None, 5 * math.cos(a), 5 * math.sin(a), o.team
+                    poke = 5 * self.BALL_SPEED
+                    b.owner, b.vx, b.vy, b.last_team = None, poke * math.cos(a), poke * math.sin(a), o.team
                 return
 
     def _shot_stoppers(self) -> None:
         b = self.ball
         defending = 1 - b.shot_by
         speed = math.hypot(b.vx, b.vy)
-        if speed < 8.0:
+        if speed < 8.0 * self.BALL_SPEED:
             b.shot_by = None
             return
         gk = self.players[defending * 5]
@@ -549,11 +566,13 @@ class Match:
             # The intended receiver is expecting it: a pass is played to be
             # controlled. Without this, a 10 m pass (~13 m/s) was fumbled half the
             # time and short passes completed 31%, where real ones complete ~85%.
-            if speed > 24.0 or (speed > 16.0 and self.rng.random() < 0.1):
+            k = self.BALL_SPEED
+            if speed > 24.0 * k or (speed > 16.0 * k and self.rng.random() < 0.1):
                 return
         else:
-            limit = 25.0 if p.idx == 0 else 20.0
-            if speed > limit or (speed > 12.0 and self.rng.random() < 0.5):
+            k = self.BALL_SPEED
+            limit = (25.0 if p.idx == 0 else 20.0) * k
+            if speed > limit or (speed > 12.0 * k and self.rng.random() < 0.5):
                 return
         self._gain(p)
 
@@ -636,7 +655,7 @@ class Match:
         self._kickoff(1 - scorer)
 
     def _spot(self, team: int, idx: int) -> tuple:
-        x, y = FORMATION[idx]
+        x, y = self.FORMATION[idx]
         s = _side(team)
         return s * x, s * y
 
@@ -657,3 +676,167 @@ class Match:
                             round(b.x, 1), round(b.y, 1),
                             [[round(p.x, 1), round(p.y, 1)] for p in self.players],
                             None if b.owner is None else b.owner.team * 5 + b.owner.idx])
+
+
+# ---------------------------------------------------------------------------- live mode
+#
+# LiveMatch: opt-in (run_match.py --live, bench.py --live). It plays on the same internal
+# documented-scale pitch, but talks to the agents the way the live server does and uses
+# constants measured from live logs. Live is ~7.86x smaller in both axes than documented:
+# x -7..7, y -4.45..4.45 (kak1 decision logs + memory-team turns, 2026-11-05).
+#
+# Sources (all 2026-11-05, files kept by the team, not in the repo):
+#   LOGS   = kak1 CloudWatch decision logs, 3 full matches, 180 decision ticks
+#            (kak1_{gk,def,mid,fwd1,fwd2}.json: decision lines + FACTS of 639 model calls)
+#   RAW    = one full open-play payload logged at t=1.64 s (raw_payload line, same files)
+#   MEM    = another team's stored turns (AgentCore Memory), 1 match, 200 player moves
+# Each constant below says which, and on how many events it rests.
+
+LIVE_HALF_X, LIVE_HALF_Y = 7.0, 4.45
+LIVE_SX, LIVE_SY = HALF_X / LIVE_HALF_X, HALF_Y / LIVE_HALF_Y   # live unit -> doc metres
+LIVE_MATCH_SECONDS = 120.0       # LOGS: all 3 matches end at t=118-120
+
+
+class LiveMatch(Match):
+    """The engine as the live server looks to an agent (see the block comment above)."""
+
+    # Player speeds. RAW: speed field 1.0 for MOVING (3 players), 1.5 with isSprinting (2).
+    # LOGS: MOVE_TO sprint=false toward a far target moved 0.96 u/s median (n=26 intervals);
+    # sprint=true 1.14 median, 1.42 p75, 1.87 max (n=14). MEM: p95 1.41, max 1.51 (n=200).
+    RUN = 1.0 * LIVE_SX              # 7.86 m/s (engine default 5.0)
+    SPRINT = 1.5 * LIVE_SX           # 11.8 m/s (engine default 7.5)
+    WALK = 0.5 * LIVE_SX             # NOT MEASURED: keeps the default walk/run ratio of 0.5
+    # Carrying the ball. RAW: the dribbler moves at 0.4 u/s while sprinting (n=1).
+    # LOGS: players who held the ball at two ticks in a row moved 0.43 u/s median (n=7).
+    DRIBBLE_MAX = 0.4 * LIVE_SX      # 3.1 m/s cap (engine default: 0.85 x pace, ~4.3 running)
+    # Kick speeds and the speed a player can control, scaled like the players (assumption:
+    # the live game is the engine's physics running ~1.57x faster). LOGS: a loose ball
+    # covered 2.5-3.6 u/s of x between ticks 7 times (n=19 loose-to-loose intervals); the
+    # default engine cannot exceed ~1.65 u/s averaged over 2 s, scaled it reaches ~2.6.
+    BALL_SPEED = RUN / Match.RUN     # 1.57
+    # Ball ahead of its carrier. LOGS: |ball x - carrier x| median 0.15 u (n=107, x only);
+    # RAW: 0.13 u (n=1).
+    BALL_OFFSET = 0.15 * LIVE_SX     # 1.2 m (engine default 0.5)
+    # Keeper with no order. LOGS (FACTS): opponent GK |x| median 5.92 u (n=639); RAW: both
+    # keepers on StayNearGoal at |x| 5.94 and 6.08. So ~1.0 u off the line at 7.0.
+    GK_DEPTH = 1.0 * LIVE_SX         # 7.9 m (engine default 2.0)
+    # Reset positions after a goal. LOGS (FACTS at t=29.1 right after a goal, n=1 snapshot):
+    # kak1 stood at GK -5.5, DEF -4.0, MIDs (-2.5, +-1.7), FWD (-1.0, 0). The portal's
+    # formation sets these per team, so the opponent's differ; both sides get kak1's here.
+    FORMATION = {0: (-5.5 * LIVE_SX, 0.0), 1: (-4.0 * LIVE_SX, 0.0),
+                 2: (-2.5 * LIVE_SX, 1.7 * LIVE_SY), 3: (-2.5 * LIVE_SX, -1.7 * LIVE_SY),
+                 4: (-1.0 * LIVE_SX, 0.0)}
+    # NOT CALIBRATED, left at the defaults: ball control and tackling (CONTROL_RADIUS,
+    # TACKLE_RADIUS, tackle odds), the shot and save model, GOAL_HALF_WIDTH, stamina. Why:
+    # SIMULATION.md "Live mode".
+
+    # The very first call of a live match is a KICK_OFF payload on the documented scale
+    # (RAW, 5 agents: GK at x -50, DEF (-30,-8), ...); open play 2 s later is on the live
+    # scale. These are the positions that payload had, HOME; AWAY is rotated 180 degrees.
+    KICKOFF_PAYLOAD_SPOTS = {0: (-50, 0), 1: (-30, -8), 2: (-5, 5), 3: (-2, -5), 4: (-3, 10)}
+    BALL_REST_HEIGHT = 0.14          # LOGS: ball y (height) 0.14 on 95% of ticks (n=1077)
+    BALL_LOFT_HEIGHT = 1.6           # LOGS: highest lofted ball seen ~1.7
+
+    def __init__(self, home, away, seed: int = 0, record: bool = False,
+                 seconds: float = LIVE_MATCH_SECONDS, realtime: bool = False):
+        self._air_total = 0.0          # flight time of the last lofted kick, for its height
+        self._kickoff_sent = False
+        self._first_kickoff_team = None
+        self._queue: list = []         # (due time, team, pid, commands) with COMMAND_DELAY
+        super().__init__(home, away, seed=seed, record=record, seconds=seconds, realtime=realtime)
+
+    def _kickoff(self, team: int) -> None:
+        super()._kickoff(team)
+        if self._first_kickoff_team is None:
+            self._first_kickoff_team = team
+
+    # --- what the agents see
+    def payload(self) -> dict:
+        if not self._kickoff_sent and self.time < 1e-9:
+            self._kickoff_sent = True
+            return self._kickoff_payload()
+        b = self.ball
+        if b.air > 0 and self._air_total > 0:
+            f = 1.0 - b.air / self._air_total
+            h = self.BALL_REST_HEIGHT + self.BALL_LOFT_HEIGHT * math.sin(math.pi * _clamp(f, 0.0, 1.0))
+        else:
+            h = self.BALL_REST_HEIGHT
+        # The ball is 3D live: y is its height, z is sideways (RAW).
+        ball = {"position": {"x": round(b.x / LIVE_SX, 3), "y": round(h, 3), "z": round(b.y / LIVE_SY, 3)},
+                "velocity": {"x": round(b.vx / LIVE_SX, 3), "y": 0.0, "z": round(b.vy / LIVE_SY, 3)},
+                "isFree": b.owner is None}
+        if b.owner is not None:
+            ball["possessionAgentId"] = b.owner.agent_id
+        players = []
+        for p in self.players:
+            v = math.hypot(p.vx / LIVE_SX, p.vy / LIVE_SY)
+            players.append({"agentId": p.agent_id, "teamCode": "home" if p.team == 0 else "away",
+                            "position": {"x": round(p.x / LIVE_SX, 3), "y": round(p.y / LIVE_SY, 3)},
+                            "velocity": {"x": round(p.vx / LIVE_SX, 3), "y": round(p.vy / LIVE_SY, 3)},
+                            "stamina": round(p.stamina, 3),     # 0-1 in open play live (RAW)
+                            "speed": round(v, 3),
+                            "isSprinting": math.hypot(p.vx, p.vy) > self.RUN + 0.1})
+        return {"tick": self.tick, "gameTime": round(self.time, 2), "playMode": "OPEN_PLAY",
+                "score": {"home": self.stats[0].goals, "away": self.stats[1].goals},
+                "ball": ball, "players": players, "teamChat": []}
+
+    def _kickoff_payload(self) -> dict:
+        players = []
+        for t in (0, 1):
+            s = _side(t)
+            for i in range(5):
+                x, y = self.KICKOFF_PAYLOAD_SPOTS[i]
+                players.append({"teamCode": "home" if t == 0 else "away", "agentId": f"agentId_{i}",
+                                "position": {"x": s * x, "y": s * y}, "orientation": 90 if t == 0 else 270,
+                                "stamina": 100, "currentAction": "IDLE", "lastAction": "Stay",
+                                "speed": 0, "isSprinting": False})
+        return {"tick": 0, "gameTime": 0, "playMode": "KICK_OFF", "modeTeamId": self._first_kickoff_team,
+                "score": {"home": 0, "away": 0},
+                "ball": {"position": {"x": 0, "y": 0}, "velocity": {"x": 0, "y": 0},
+                         "isFree": True, "possessionAgentId": None},
+                "players": players, "teamChat": []}
+
+    # Seconds between the snapshot an agent decides on and its command taking effect. Live,
+    # the server applies an answer when it arrives. LOGS: kak1's own decision time was
+    # 0 ms for rule turns (n=462) and 434 ms median, 555 ms p90 for model turns (n=536);
+    # the AgentCore round trip on top is NOT MEASURED. 0 = applied at once, as by default.
+    COMMAND_DELAY = 0.0
+
+    # --- what the agents send: live units in, documented metres inside
+    def _apply(self, team: int, pid: int, cmds) -> None:
+        if isinstance(cmds, list):
+            cmds = [self._to_doc(c) for c in cmds]
+        if self.COMMAND_DELAY > 0:
+            self._queue.append((self.time + self.COMMAND_DELAY - 1e-9, team, pid, cmds))
+        else:
+            super()._apply(team, pid, cmds)
+
+    def _step(self) -> None:
+        if self._queue:
+            due = [q for q in self._queue if q[0] <= self.time]
+            self._queue = [q for q in self._queue if q[0] > self.time]
+            for _, team, pid, cmds in due:
+                Match._apply(self, team, pid, cmds)
+        super()._step()
+
+    @staticmethod
+    def _to_doc(c):
+        if not isinstance(c, dict) or not isinstance(c.get("parameters"), dict):
+            return c
+        prm = dict(c["parameters"])
+        kind = c.get("commandType")
+        if kind == "MOVE_TO":
+            for k, sc in (("target_x", LIVE_SX), ("target_y", LIVE_SY)):
+                if k in prm:
+                    v = _num(prm[k], None)
+                    if v is not None:
+                        prm[k] = v * sc
+        elif kind == "FOLLOW_PLAYER" and "distance" in prm:
+            v = _num(prm["distance"], None)
+            if v is not None:
+                prm["distance"] = v * LIVE_SX
+        return dict(c, parameters=prm)
+
+    def _release(self, p, tx, ty, speed, sigma_deg, air=0.0):
+        super()._release(p, tx, ty, speed, sigma_deg, air)
+        self._air_total = air

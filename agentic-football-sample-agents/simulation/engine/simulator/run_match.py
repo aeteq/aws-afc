@@ -13,6 +13,12 @@ Another team's agents, home and away (team specs: simulator/external.py):
     python3 simulator/run_match.py --home mine=@my-arns.txt --away rivals=@rivals-arns.txt --replay m.html
     python3 simulator/run_match.py --opponent py:../their-repo/sim_team.py:commands
 
+Live mode (opt-in): the live pitch and units, 120 s matches, constants measured from live
+logs (engine.LiveMatch). Also sets kak1's deployed settings PITCH_HALF_X=7, BALL_LATERAL=z,
+MATCH_SECONDS=120 before any team loads:
+
+    python3 simulator/run_match.py --live --team kak1=py:../../ai-team-kak1/sim_team.py --matches 6
+
 Teams: sample, aggressive, defensive, idle, box, diamond, pyramid, 3-1 (see simulator/teams.py), or a spec.
 Physics are a stand-in for the real server's; see simulator/engine.py before reading
 anything into a scoreline.
@@ -24,9 +30,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from engine import MATCH_SECONDS, Match  # noqa: E402
+import engine  # noqa: E402
+from engine import Match  # noqa: E402
 from external import parse_spec  # noqa: E402
 from teams import TEAM_NAMES, all_team_names, make  # noqa: E402
+import teams  # noqa: E402
 
 
 def _clock(t: float) -> str:
@@ -37,10 +45,22 @@ def _label(team: str) -> str:
     return team if team in all_team_names() else parse_spec(team)[0]
 
 
+MATCH = Match   # engine.LiveMatch with --live
+
+
+def use_live_mode() -> None:
+    """Switch to engine.LiveMatch and give kak1 its deployed settings. Call before any team
+    is loaded: kak1 reads these when tactics.py is imported (sim_team.py only sets defaults)."""
+    global MATCH
+    MATCH = engine.LiveMatch
+    os.environ.update(PITCH_HALF_X="7", BALL_LATERAL="z", MATCH_SECONDS="120")
+    teams.DOC_SCALE_BUILTINS = True   # built-in teams see documented coordinates (teams.DocScale)
+
+
 def play_one(home: str, away: str, seed: int, replay: str | None, deadline: float | None,
              realtime: bool = False) -> None:
     controllers = make(home, deadline), make(away, deadline)
-    r = Match(*controllers, seed=seed, record=replay is not None, realtime=realtime).run()
+    r = MATCH(*controllers, seed=seed, record=replay is not None, realtime=realtime).run()
     home, away = r.home, r.away
     print(f"\n  {home.upper()} {r.score[0]} - {r.score[1]} {away.upper()}   (seed {seed})\n")
     for e in r.events:
@@ -72,8 +92,11 @@ def play_one(home: str, away: str, seed: int, replay: str | None, deadline: floa
 def series(team: str, matches: int, seed: int, opponents: list[str] | None = None,
            deadline: float | None = None) -> None:
     opponents = opponents or [t for t in TEAM_NAMES if t != team] + [team]  # mirror match last
-    print(f"\n{_label(team).upper()}: {matches} matches per side vs each opponent "
-          f"({MATCH_SECONDS / 60:.0f}-minute simulated matches)\n")
+    if MATCH is engine.LiveMatch:
+        length = f"{engine.LIVE_MATCH_SECONDS:.0f}-second simulated matches, live mode"
+    else:
+        length = f"{engine.MATCH_SECONDS / 60:.0f}-minute simulated matches"
+    print(f"\n{_label(team).upper()}: {matches} matches per side vs each opponent ({length})\n")
     print(f"  {'opponent':11s}{'side':6s}{'W':>4s}{'D':>4s}{'L':>4s}{'GF':>6s}{'GA':>5s}"
           f"{'shots':>8s}{'poss':>7s}{'pass%':>7s}{'wasted':>8s}")
     totals = [0, 0, 0, 0, 0]
@@ -86,10 +109,10 @@ def series(team: str, matches: int, seed: int, opponents: list[str] | None = Non
                 s = seed + m
                 ours, theirs = make(team, deadline), make(opp, deadline)
                 if side == "home":
-                    r = Match(ours, theirs, seed=s).run()
+                    r = MATCH(ours, theirs, seed=s).run()
                     us, them, goals = r.stats[0], r.stats[1], r.score
                 else:
-                    r = Match(theirs, ours, seed=s).run()
+                    r = MATCH(theirs, ours, seed=s).run()
                     us, them, goals = r.stats[1], r.stats[0], r.score[::-1]
                 for c in (ours, theirs):
                     if hasattr(c, "calls"):
@@ -134,7 +157,12 @@ def main() -> None:
     parser.add_argument("--realtime", action="store_true",
                         help="single match only: one turn every 2 s of wall clock, both teams "
                              "asked at once, as live (a 5-minute match takes 5 minutes)")
+    parser.add_argument("--live", action="store_true",
+                        help="live-like mode: live pitch units, 120 s, measured constants "
+                             "(engine.LiveMatch); runs kak1 with its deployed settings")
     args = parser.parse_args()
+    if args.live:
+        use_live_mode()
 
     if args.home or args.away:
         play_one(args.home or "sample", args.away or "aggressive", args.seed, args.replay,
