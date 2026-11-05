@@ -690,9 +690,11 @@ def candidates(game_state, team_id, player_id):
         fwd = [i for i in mates if ROLE.get(i) == "FWD"]
         if fwd and _lane_clear(me, _pos(v.mates[fwd[0]]), opps) > 3.0:
             add("through ball", v.c("PASS", target_player_id=fwd[0], type="THROUGH"))
-    near_opp = min(opps, key=lambda o: _d(o, me), default=(0, 0))
-    ty = _clamp(me[1] + (3.0 if near_opp[1] < me[1] else -3.0), -12, 12)
-    add("dribble", v.c("MOVE_TO", target_x=round(me[0] + v.s * 12.0, 1), target_y=round(ty, 1), sprint=v.sprint()))
+    # Dribble only with room: live, dribbles were lost 6 of 8 times (review note).
+    if free(me) > PRESSURE_DIST:
+        near_opp = min(opps, key=lambda o: _d(o, me), default=(0, 0))
+        ty = _clamp(me[1] + (3.0 if near_opp[1] < me[1] else -3.0), -12, 12)
+        add("dribble", v.c("MOVE_TO", target_x=round(me[0] + v.s * 12.0, 1), target_y=round(ty, 1), sprint=v.sprint()))
     return out[:4]
 
 
