@@ -585,6 +585,11 @@ def _defend(v):
         return v.c("PRESS_BALL", intensity=1.0)
     ball_in_our_half = (v.ball[0] - 0.0) * v.s < 0
     if v.role == "DEF":
+        if _d(v.ball, v.my_goal) < COVER_REACH:
+            # A mate is pressing the carrier near our goal: cover the shot, don't follow a
+            # runner out of the middle (live: goals 1-2 s after losing it in our half).
+            tx, ty = _cover_point(v)
+            return v.c("MOVE_TO", target_x=round(tx, 1), target_y=round(ty, 1), sprint=v.sprint())
         threat = _most_dangerous_free_opp(v)
         if threat is not None:
             return v.c("MARK", target_player_id=threat, tightness="TIGHT")
@@ -603,6 +608,19 @@ def _defend(v):
     if not ball_in_our_half and _d(me, v.ball) < radius and v.press_allowed():
         return v.c("PRESS_BALL", intensity=1.0 if v.mode == "chase" else 0.8)
     return _hold_high(v)
+
+
+COVER_REACH = 35.0       # ball this close to our goal, opponent on it, DEF not pressing: cover
+COVER_GAP = 15.0         # cover this far goal-side of the ball, on the ball -> goal-centre line
+
+
+def _cover_point(v):
+    """On the line ball -> our goal centre, COVER_GAP goal-side of the ball, never inside 10 of goal."""
+    bx, by = v.ball
+    gx, gy = v.my_goal
+    d = _d(v.ball, v.my_goal) or 1.0
+    k = _clamp(d - COVER_GAP, 10.0, d) / d
+    return gx + (bx - gx) * k, gy + (by - gy) * k
 
 
 def _most_dangerous_free_opp(v):
