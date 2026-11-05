@@ -313,7 +313,8 @@ def _where(game_state, team_id, pid):
         f = tactics.facts(game_state, team_id, pid) or {}
         return {"t": round(game_state.get("gameTime") or 0), "me": f.get("me"), "ball": f.get("ball"),
                 "owner": f.get("ballOwner"), "team": team_id, "score": game_state.get("score"),
-                "opps": f.get("opps"), "ball_h": _ball_height(game_state)}
+                "opps": f.get("opps"), "ball_h": _ball_height(game_state),
+                "pm": game_state.get("playMode")}
     except Exception:  # logging must never break a decision
         return {}
 
