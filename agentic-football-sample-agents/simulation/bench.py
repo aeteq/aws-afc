@@ -45,6 +45,10 @@ from engine import Match  # noqa: E402
 
 BUILTINS = ["sample", "aggressive", "defensive", "box", "diamond", "pyramid", "3-1"]
 AWS_FALLBACK = os.path.join(HERE, "teams", "sample_fallback.py")
+# Stand-ins for the live, model-driven AWS teams (built from their prompts and live logs).
+FILE_TEAMS = {"aws": AWS_FALLBACK,
+              "nova": os.path.join(HERE, "teams", "nova_balanced.py"),
+              "novafix": os.path.join(HERE, "teams", "nova_balanced_fixed.py")}
 
 
 # --- loading teams in isolation ------------------------------------------------------------
@@ -172,8 +176,9 @@ def main():
     ap.add_argument("--seeds", type=int, default=20, help="matches per side per opponent (default 20)")
     ap.add_argument("--seed", type=int, default=1, help="first seed (default 1)")
     ap.add_argument("--opponents", default=",".join(BUILTINS),
-                    help="comma list of built-ins, and 'aws' for teams/sample_fallback.py "
-                         "(same code as the built-in 'sample', so not in the default list)")
+                    help="comma list of built-ins, 'aws' (teams/sample_fallback.py, same code as "
+                         "'sample'), 'nova' / 'novafix' (stand-ins for the live Nova-driven AWS teams, "
+                         "with and without their possession bug)")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     args = ap.parse_args()
 
@@ -185,7 +190,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="bench-") as tmp:
         specs = {"new": "py:" + team_file}
         for o in opponents:
-            specs[o] = "py:" + AWS_FALLBACK if o == "aws" else o
+            specs[o] = "py:" + FILE_TEAMS[o] if o in FILE_TEAMS else o
         has_base = args.base.lower() != "none"
         if has_base:
             rel = args.base_team or os.path.relpath(os.path.abspath(args.team), SAMPLES)
