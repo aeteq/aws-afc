@@ -133,6 +133,25 @@ mids_marked = scene(HOME, {**AWAY, 2: (-5, 10), 4: (-5, -10)}, (-29.5, 0), holde
 c = go(mids_marked, 1)
 check("DEF passes back to the keeper when both midfielders are marked",
       c["commandType"] == "PASS" and c["parameters"]["target_player_id"] == 0)
+for ay in (8, -8):
+    wide = scene(HOME, {**AWAY, 3: (-25, ay)}, (-24.7, ay), holder=3)
+    c = go(wide, 1)
+    x, y = tgt(c)
+    check(f"DEF shows the carrier at y={ay} wide: goal-side and on his inside",
+          c["commandType"] == "MOVE_TO" and x < -25 and abs(y) < abs(ay))
+# Same for the AWAY team (attacks -x): our DEF defends +x.
+away_home = {k: (-x, y) for k, (x, y) in AWAY.items()}
+away_home[3] = (25, 8)
+c = t.decide(scene({k: (-x, y) for k, (x, y) in HOME.items()}, away_home, (24.7, 8), holder=3), 1, 1)[0]
+x, y = tgt(c)
+check("AWAY DEF shows the carrier wide too", c["commandType"] == "MOVE_TO" and x > 25 and y < 8)
+# MID covering a spare attacker (our half outnumbered: 3 of theirs vs DEF + MID1) shows him wide.
+outnum = scene({**HOME, 2: (-15, 5), 3: (10, -12)},
+               {**AWAY, 2: (-20, 10), 4: (-40, 0), 1: (-10, -15)}, (-9.7, -15), holder=1)
+c = go(outnum, 2)
+x, y = tgt(c)
+check("MID covering a spare attacker shows him wide (goal-side, inside)",
+      c["commandType"] == "MOVE_TO" and x < -20 and y < 10)
 
 # MID: striker first, through ball; only one midfielder presses.
 mid_ball = scene(HOME, {**AWAY, 2: (20, 20)}, (-4.5, 12), holder=2)

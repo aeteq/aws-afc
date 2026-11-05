@@ -97,7 +97,9 @@ _MID_NOTES = """You are one of two playmakers; you take the {side} channel, the 
 - If no forward pass is safe, recycle to the defender (player 1) and reposition.
 - Without the ball: press the opponent carrying it in the middle third, but only if you are
   nearer the ball than player {other}; otherwise cover. Fall back to cover the defender if our
-  half is outnumbered."""
+  half is outnumbered.
+- When you cover an attacker, show him wide: stand on his inside shoulder (between him and the
+  centre of our goal) so he is pushed toward the touchline, away from a clear view of goal."""
 
 ROLE_NOTES = {
     "GK": """Zone: our penalty area. HARD RULE: never leave the area.
@@ -107,6 +109,8 @@ ROLE_NOTES = {
 - If an opponent is clear through on goal, step toward them to narrow the angle, then hold.""",
     "DEF": """Zone: our half. HARD RULE: never cross the halfway line.
 - Without the ball: stay goal-side of the most dangerous opponent (closest to our goal).
+- Show them wide: stand on their inside shoulder (between them and the centre of our goal) so
+  they are pushed toward the touchline, away from a clear view of goal.
 - Tackle (PRESS_BALL) only when the opponent is within reach AND you are between them and our
   goal; otherwise block the lane.
 - With the ball: pass forward to a playmaker (midfielder 2 or 3, whichever is unmarked). If they

@@ -39,6 +39,8 @@ PRESSURE_DIST = 4.0              # an opponent this close to me = under pressure
 MARKED_DIST = 5.0                # an opponent this close to a teammate = marked
 SAFE_LANE = 2.5                  # pass lane clearance for a "safe" pass
 TACKLE_REACH = 3.5               # DEF tackles only within this distance
+GOAL_SIDE_GAP = 3.0              # DEF stands this far from his man, toward our goal
+INSIDE_SHADE = 1.5               # ...and this far to his inside, to show him wide
 THROUGH_LEAD = 5.0               # "space ahead" of a forward for a through ball
 SPRINT_MIN_STAMINA = 0.35
 
@@ -401,9 +403,25 @@ def _def_guard(v):
     threats = v.threats()
     if not threats:
         return v.move(_toward(v.my_goal, v.ball, 20.0))
-    # Goal-side of the most dangerous opponent. If he has the ball, this blocks his lane.
-    tp = _pos(v.opps[threats[0]])
-    return v.move(_toward(tp, v.my_goal, 3.0), sprint=_d(me, tp) > 10 and v.sprint())
+    # Goal-side of the most dangerous opponent, on his inside shoulder: show him wide.
+    t = v.opps[threats[0]]
+    tp = _pos(t)
+    return v.move(_show_wide_spot(v, tp, t.get("velocity") or {}),
+                  sprint=_d(me, tp) > 10 and v.sprint())
+
+
+def _show_wide_spot(v, tp, vel):
+    """Where to stand to push an attacker toward the touchline: GOAL_SIDE_GAP toward our goal
+    centre, shifted INSIDE_SHADE toward the middle of the pitch. That leaves him the outside
+    as his open route, where the angle to goal keeps shrinking. If he's dead centre, push him
+    to the side he's drifting toward (or the side he's on)."""
+    gx, gy = _toward(tp, v.my_goal, GOAL_SIDE_GAP)
+    if abs(tp[1]) >= 1.0:
+        out = 1.0 if tp[1] > 0 else -1.0             # his outside: away from the centre
+    else:
+        vy = vel.get("y", 0.0) or 0.0
+        out = (1.0 if vy > 0 else -1.0) if abs(vy) > 0.3 else (1.0 if tp[1] >= 0 else -1.0)
+    return gx, gy - out * INSIDE_SHADE
 
 
 def _def_on_ball(v):
@@ -495,17 +513,22 @@ def _mid_cover(v):
             t = in_our_half[0]
             tp = _pos(v.opps[t])
             if o is None or _d(me, tp) <= _d(_pos(v.mates[o]), tp):
-                return v.move(_toward(tp, v.my_goal, 3.0), sprint=v.sprint())
+                return _mark_wide(v, t)
         else:
             a, b = in_our_half[0], in_our_half[1]
             pa, pb = _pos(v.opps[a]), _pos(v.opps[b])
             op = _pos(v.mates[o])
             # Pick the split with the shorter total run.
             mine_a = _d(me, pa) + _d(op, pb) <= _d(me, pb) + _d(op, pa)
-            tp = pa if mine_a else pb
-            return v.move(_toward(tp, v.my_goal, 3.0), sprint=v.sprint())
+            return _mark_wide(v, a if mine_a else b)
     d = _clamp(v.depth(v.ball) * 0.6, 20.0, 2 * THIRD)
     return v.move((v.fwd(d), v.channel_y() * 0.7 + v.ball[1] * 0.3))
+
+
+def _mark_wide(v, opp_id):
+    """Midfielder covering a spare attacker: goal-side on his inside, like the DEF."""
+    t = v.opps[opp_id]
+    return v.move(_show_wide_spot(v, _pos(t), t.get("velocity") or {}), sprint=v.sprint())
 
 
 # --- FWD: opponent half, never drops behind halfway ---------------------------------------
