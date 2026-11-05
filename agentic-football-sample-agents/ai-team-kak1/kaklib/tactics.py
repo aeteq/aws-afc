@@ -519,6 +519,9 @@ def _gk(v):
 
 # --- off the ball ------------------------------------------------------------------------
 
+FWD_LEAD = 25.0          # forward stays at most this far ahead of the ball in our possession
+
+
 def _support(v):
     """A teammate has the ball: get open."""
     bx, by = v.ball
@@ -527,7 +530,10 @@ def _support(v):
         if v.mode == "protect":
             # Winning late: show for short passes near halfway instead of running in behind.
             return v.c("MOVE_TO", target_x=round(v.fwd(65), 1), target_y=12.0 * side * v.s, sprint=False)
-        return v.c("MOVE_TO", target_x=round(v.fwd(94), 1), target_y=10.0 * side * v.s, sprint=v.sprint())
+        # Stay within passing range of the ball (_best_pass ignores mates beyond 35): from
+        # fwd(94) a mid on halfway could only find us with the long release.
+        depth = _clamp((bx - v.my_goal[0]) * v.s + FWD_LEAD, 60.0, 94.0)
+        return v.c("MOVE_TO", target_x=round(v.fwd(depth), 1), target_y=10.0 * side * v.s, sprint=v.sprint())
     if v.role == "MID":
         tx = _clamp(bx - v.s * 6.0, -45, 45)
         if v.mode == "chase":
@@ -590,8 +596,9 @@ def _defend(v):
             return v.c("MARK", target_player_id=threat, tightness="TIGHT")
         return _shape(v)
     if v.role == "MID":
-        # Chasing: press anywhere. Otherwise only in our half.
-        if (ball_in_our_half or v.mode == "chase") and _d(me, v.ball) < 15 and v.press_allowed():
+        # Second presser anywhere (press_allowed caps it at 2): in their half this is the
+        # counter-press right after we lose it, far from our goal.
+        if _d(me, v.ball) < 15 and v.press_allowed():
             return v.c("PRESS_BALL", intensity=0.8)
         return _shape(v)
     # Forwards: second presser high up the pitch, otherwise wait for the counter.
