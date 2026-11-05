@@ -46,20 +46,29 @@ COACH_TAG = os.getenv("COACH_TAG", "kak1").lower()
 _memory = {}
 
 
-def _coach_style(chat, team_id):
-    """Coach override: a teamChat message containing 'STYLE counter' (or auto/normal/direct/patient)."""
+def coach_messages(chat, team_id):
+    """Our coach's messages, oldest first. All 10 players hear every message, so a message
+    only counts if it carries COACH_TAG (and, when the payload says, our team)."""
     my_codes = {str(team_id), "home" if team_id == 0 else "away"}
-    for m in reversed(chat or []):
+    out = []
+    for m in chat or []:
         if isinstance(m, dict):
             team = m.get("teamId", m.get("teamCode"))
             if team is not None and str(team).lower() not in my_codes:
                 continue
-            text = m.get("message") or m.get("text") or m.get("content") or ""
+            text = str(m.get("message") or m.get("text") or m.get("content") or "")
         else:
             text = str(m)
-        if COACH_TAG and COACH_TAG not in str(text).lower():
+        if COACH_TAG and COACH_TAG not in text.lower():
             continue
-        hit = re.search(r"\bSTYLE\s+(" + "|".join(STYLES) + r")\b", str(text), re.I)
+        out.append(text)
+    return out
+
+
+def _coach_style(chat, team_id):
+    """Coach override: our message containing 'STYLE counter' (or auto/normal/direct/patient)."""
+    for text in reversed(coach_messages(chat, team_id)):
+        hit = re.search(r"\bSTYLE\s+(" + "|".join(STYLES) + r")\b", text, re.I)
         if hit:
             return hit.group(1).lower()
     return None
@@ -232,7 +241,7 @@ class View:
         r = (LONG_SHOT_RANGE if long_ok else SHOOT_RANGE).get(self.role, 20.0)
         if self.mode == "chase":
             r += CHASE_SHOOT_BONUS
-        if self.keeper_out and self.role != "DEF":
+        if self.keeper_out and self.role != "DEF" and self.mode != "protect":
             r += KEEPER_OUT_SHOOT_BONUS
         return min(r, 45.0)                # past this, shots are just giveaways
 
@@ -488,6 +497,11 @@ def facts(game_state, team_id, player_id):
         "style": v.style,                  # normal | counter | direct | patient (read from opponent)
         "oppKeeperOut": v.keeper_out,
         "mode": v.mode,                    # normal | chase (need a goal) | protect (keep the lead)
+        # Positions so the model can judge where to move and whom to mark. Rounded to keep it short.
+        "me": [round(me[0]), round(me[1])],
+        "ball": [round(v.ball[0]), round(v.ball[1])],
+        "mates": {i: [round(_pos(p)[0]), round(_pos(p)[1])] for i, p in sorted(v.mates.items()) if i != v.pid},
+        "opps": {i: [round(_pos(p)[0]), round(_pos(p)[1])] for i, p in sorted(v.opps.items())},
         "score": game_state.get("score", {}),
         "gameTime": game_state.get("gameTime", 0),
     }
