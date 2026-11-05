@@ -4,6 +4,7 @@
     python3 bench.py                                   # ai-team-kak1 now vs origin/main
     python3 bench.py --base HEAD~3 --seeds 40          # vs an older commit, more matches
     python3 bench.py --team ../ai-team-kak1 --base none   # no baseline, just the table
+    python3 bench.py --live                            # live-like mode (engine.LiveMatch)
 
 Plays NEW and BASE on the same seeds, both sides (home and away), against the same
 opponents, plus NEW vs BASE head to head. Prints one line per opponent and a verdict.
@@ -41,7 +42,7 @@ SAMPLES = os.path.dirname(HERE)                       # agentic-football-sample-
 REPO_PREFIX = "agentic-football-sample-agents"
 sys.path.insert(0, ENGINE)
 
-from engine import Match  # noqa: E402
+from engine import LiveMatch, Match  # noqa: E402
 
 BUILTINS = ["sample", "aggressive", "defensive", "box", "diamond", "pyramid", "3-1"]
 AWS_FALLBACK = os.path.join(HERE, "teams", "sample_fallback.py")
@@ -84,9 +85,14 @@ def _load_isolated(name: str, path: str):
 
 
 _FACTORIES: dict = {}
+_MATCH = Match
 
 
-def _init_worker(specs: dict):
+def _init_worker(specs: dict, live: bool = False):
+    global _MATCH
+    if live:
+        _use_live_settings()
+        _MATCH = LiveMatch
     from teams import make
     for name, spec in specs.items():
         if spec.startswith("py:"):
@@ -100,13 +106,20 @@ def _play(job):
     us, them, side, seed = job
     a, b = _FACTORIES[us](), _FACTORIES[them]()
     if side == "home":
-        r = Match(a, b, seed=seed).run()
+        r = _MATCH(a, b, seed=seed).run()
         ours, theirs, (gf, ga) = r.stats[0], r.stats[1], r.score
     else:
-        r = Match(b, a, seed=seed).run()
+        r = _MATCH(b, a, seed=seed).run()
         ours, theirs, (ga, gf) = r.stats[1], r.stats[0], r.score
     tot = (ours.possession + theirs.possession) or 1.0
     return gf, ga, ours.shots, ours.possession / tot
+
+
+def _use_live_settings():
+    """kak1's deployed settings; read when tactics.py is imported, so set before any load."""
+    os.environ.update(PITCH_HALF_X="7", BALL_LATERAL="z", MATCH_SECONDS="120")
+    import teams
+    teams.DOC_SCALE_BUILTINS = True   # built-in teams see documented coordinates (teams.DocScale)
 
 
 # --- stats -------------------------------------------------------------------------------
@@ -180,6 +193,9 @@ def main():
                          "'sample'), 'nova' / 'novafix' (stand-ins for the live Nova-driven AWS teams, "
                          "with and without their possession bug)")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
+    ap.add_argument("--live", action="store_true",
+                    help="live-like mode (engine.LiveMatch: live pitch units, 120 s matches, "
+                         "measured constants); both versions run with kak1's deployed settings")
     args = ap.parse_args()
 
     team_file = os.path.join(os.path.abspath(args.team), "sim_team.py")
@@ -209,14 +225,18 @@ def main():
             jobs += [("new", "base", side, s) for side in ("home", "away") for s in seeds]
 
         with ProcessPoolExecutor(max_workers=args.jobs, initializer=_init_worker,
-                                 initargs=(specs,)) as pool:
+                                 initargs=(specs, args.live)) as pool:
             out = dict(zip(jobs, pool.map(_play, jobs, chunksize=8)))
 
     n = args.seeds
     print(f"\nNEW = {os.path.relpath(team_file, os.getcwd())} (working tree)")
     if has_base:
         print(f"BASE = {args.base}: {_describe(args.base)}")
-    print(f"{n} seeds x home+away per opponent (simulator, documented pitch, 5-minute matches)\n")
+    if args.live:
+        print(f"{n} seeds x home+away per opponent (simulator LIVE mode: live pitch units, "
+              "120-second matches)\n")
+    else:
+        print(f"{n} seeds x home+away per opponent (simulator, documented pitch, 5-minute matches)\n")
     hdr = f"  {'opponent':10s}{'':5s}{'W':>4s}{'D':>4s}{'L':>4s}{'GF':>5s}{'GA':>5s}{'pts/m':>7s}{'GD/m':>7s}{'±95%':>6s}{'shots':>7s}{'poss':>6s}"
     print(hdr)
     paired = []                        # per (opponent, side, seed): new GD - base GD

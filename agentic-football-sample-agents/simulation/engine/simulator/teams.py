@@ -74,8 +74,59 @@ DEFENSIVE = {
 }
 
 
+# Live mode (run_match.py --live, bench.py --live). The built-in teams are written for the
+# documented pitch (x -55..55). Fed live units they would send their players to the corners,
+# so in live mode they get the conversion a pitch-aware team does (DocScale), as kak1 does
+# itself. A team spec (py:, http, arn) gets the live payload unchanged, as on the server:
+# py:../teams/sample_fallback.py plays the AWS fallback exactly as it would run live.
+DOC_SCALE_BUILTINS = False
+
+
+class DocScale:
+    """Wraps a documented-pitch team for engine.LiveMatch: live payload in, documented
+    coordinates to the team (ball made flat: y = sideways), MOVE_TO targets back to live."""
+
+    def __init__(self, inner):
+        from engine import LIVE_SX, LIVE_SY
+        self.inner, self.name, self.sx, self.sy = inner, inner.name, LIVE_SX, LIVE_SY
+
+    def commands(self, game_state, team_id, player_id):
+        gs = game_state
+        if gs.get("playMode") != "KICK_OFF":            # the kick-off payload is already documented
+            gs = dict(gs, ball=self._ball(gs.get("ball") or {}),
+                      players=[dict(p, position=self._xy(p.get("position")), velocity=self._xy(p.get("velocity")))
+                               for p in gs.get("players") or []])
+        out = []
+        for c in self.inner.commands(gs, team_id, player_id) or []:
+            prm = c.get("parameters") if isinstance(c, dict) else None
+            if isinstance(prm, dict) and c.get("commandType") == "MOVE_TO":
+                prm = dict(prm, target_x=prm.get("target_x", 0.0) / self.sx,
+                           target_y=prm.get("target_y", 0.0) / self.sy)
+                c = dict(c, parameters=prm)
+            elif isinstance(prm, dict) and c.get("commandType") == "FOLLOW_PLAYER" and "distance" in prm:
+                c = dict(c, parameters=dict(prm, distance=prm["distance"] / self.sx))
+            out.append(c)
+        return out
+
+    def _xy(self, d):
+        d = d or {}
+        return dict(d, x=d.get("x", 0.0) * self.sx, y=d.get("y", 0.0) * self.sy)
+
+    def _ball(self, b):
+        flat = {k: {"x": b[k].get("x", 0.0) * self.sx, "y": b[k].get("z", 0.0) * self.sy}
+                for k in ("position", "velocity") if isinstance(b.get(k), dict)}
+        return dict(b, **flat)
+
+
 def make(name: str, deadline: float | None = None):
     """A built-in team by name, or any other team spec (see simulator/external.py)."""
+    team = _make(name, deadline)
+    if DOC_SCALE_BUILTINS and name in all_team_names():
+        team = DocScale(team)
+    return team
+
+
+def _make(name: str, deadline: float | None = None):
     teams = {
         "sample": lambda: RuleBased("sample", SAMPLE),
         "aggressive": lambda: RuleBased("aggressive", AGGRESSIVE),

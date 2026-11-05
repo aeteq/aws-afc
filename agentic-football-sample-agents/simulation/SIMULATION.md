@@ -97,10 +97,30 @@ python simulator/run_match.py --home kak1=http://127.0.0.1:9100-9104 \
 python simulator/test_engine.py && python simulator/test_external.py
 ```
 
+## 6. Live mode (opt-in)
+
+`--live` on `run_match.py` or `bench.py` plays `engine.LiveMatch`: the engine as the live server looks to an agent, with the constants we could measure from live logs. Default mode is unchanged.
+
+```bash
+python simulator/run_match.py --live --team kak1=py:../../ai-team-kak1/sim_team.py --opponent aws=py:../teams/sample_fallback.py --matches 6
+python3 bench.py --live            # from simulation/
+```
+
+What changes:
+
+- **Agents see live units.** Open play on x −7..7, y −4.45..4.45; the ball's `y` is its height and `z` is sideways; stamina 0–1. The first call is a `KICK_OFF` payload on the documented scale (GK at x −50), as live. MOVE_TO targets are read as live units.
+- **kak1 runs with its deployed settings**: `PITCH_HALF_X=7`, `BALL_LATERAL=z`, `MATCH_SECONDS=120`, so the kick-off scale detection is exercised.
+- **Built-in teams** (`sample`, `aggressive`, …) are written for the documented pitch, so they get a conversion (`teams.DocScale`) and play as a pitch-aware team would. A team spec (`py:`, `http`, `arn`) gets the live payload unchanged: `aws=py:../teams/sample_fallback.py` plays the AWS fallback exactly as it runs live (its players drift to the corners).
+- **Measured constants** (sources in `engine.py` next to each one): 120 s matches; run 1.0 and sprint 1.5 live units/s; dribble capped at 0.4; kicks scaled with the players (×1.57); ball 0.15 ahead of its carrier; keeper 1.0 off his line; kak1's reset positions after a goal.
+- **Not calibrated** (defaults kept): ball control, tackling, shot and save odds, goal width, stamina. Three matches against one LLM team cannot separate these from the opponent's behaviour: the possession split depends mostly on the teams, and live pass losses did not depend on lane width (n=38). Shot data is 7 of ours (0 goals) and ~6 goals of theirs from an unknown number of shots.
+- `LiveMatch.COMMAND_DELAY` (default 0) delays every command, e.g. 0.5 to mimic model turns (434 ms median in our code live).
+
+Live mode is closer to live in units, speeds and match length. It still does not predict results against a model-driven team: our built-in opponents are rules.
+
 ## Limits — read before trusting a result
 
-- **Pitch size.** The engine uses the documented pitch (x −55..55, y −35..35). The live pitch is ~8× smaller in both directions: 132 live turns stayed within x −6.9..6.6 and y −3.5..3.6. kak1 handles this with `PITCH_HALF_X` in `kaklib/tactics.py` (7 when deployed; `PITCH_HALF_Y` follows the same ratio, ~4.45). The simulator runs kak1 with 55 (set by `sim_team.py` and `start_team.sh`). Anything tied to the live pitch size can't be tested here.
-- **Match length.** The engine plays 5 minutes; live matches are 120 s. kak1's `MATCH_SECONDS` is 120 when deployed and 300 in the simulator.
+- **Pitch size.** The engine uses the documented pitch (x −55..55, y −35..35). The live pitch is ~8× smaller in both directions: 132 live turns stayed within x −6.9..6.6 and y −3.5..3.6. kak1 handles this with `PITCH_HALF_X` in `kaklib/tactics.py` (7 when deployed; `PITCH_HALF_Y` follows the same ratio, ~4.45). The simulator runs kak1 with 55 (set by `sim_team.py` and `start_team.sh`). Use `--live` (section 6) to test anything tied to the live pitch size.
+- **Match length.** The engine plays 5 minutes; live matches are 120 s. kak1's `MATCH_SECONDS` is 120 when deployed and 300 in the simulator. `--live` plays 120 s.
 - **Physics are approximations.** No fouls, ball never out, rough shot and pass models. Own goals are far more common here than live.
 - **Built-in opponents are not the live AWS teams.** `sample` plays the AWS fallback rules, not the model-driven team.
 - **Possession bug in old sample code.** Teams using an old `lib/state.py` may freeze in the engine, which inflates our results against them.
