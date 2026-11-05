@@ -78,9 +78,8 @@ Reply with ONLY a JSON array of one command, e.g.
 ROLE_NOTES = {
     "GK": "- Stay near your goal. With the ball, GK_DISTRIBUTE to the most open teammate.",
     "DEF": "- Protect the goal. MARK the most dangerous attacker. With the ball, pass forward fast.",
-    "MID": "- Link play. Win loose balls (INTERCEPT). Pass to forwards in space.",
-    "FWD1": "- Score. Stay high and on the left. Run in behind when a teammate has the ball.",
-    "FWD2": "- Score. Stay high and on the right. Run in behind when a teammate has the ball.",
+    "MID": "- Link play. Keep your side channel (FACTS.side: +1 left, -1 right, 0 centre). Win loose balls (INTERCEPT). Pass to the forward in space.",
+    "FWD": "- Score. Stay high (central if FACTS.side is 0). Run in behind when a teammate has the ball.",
 }
 
 _model = None

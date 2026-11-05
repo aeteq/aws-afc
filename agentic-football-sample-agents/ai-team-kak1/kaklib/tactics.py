@@ -3,7 +3,7 @@ fallback when the LLM is late or returns something invalid.
 
 decide(game_state, team_id, player_id) -> [command]  (one command, tagged correctly)
 
-Player ids: 0 GK, 1 DEF, 2 MID, 3 FWD1 (left), 4 FWD2 (right).
+Player ids and roles: see FORMATION below (default 1-2-1: 0 GK, 1 DEF, 2+3 MID, 4 FWD).
 Pitch: x -55..55, y -35..35. HOME (team 0) attacks +x, AWAY (team 1) attacks -x.
 """
 
@@ -14,14 +14,23 @@ import re
 from state import _is_my_team, _player_idx
 
 HALF_X, HALF_Y = 55.0, 35.0
-ROLE = {0: "GK", 1: "DEF", 2: "MID", 3: "FWD1", 4: "FWD2"}
+# Formation. Roles come from the player id the server sends, not the agent folder name.
+#   1-2-1: 0 GK, 1 DEF, 2 MID (left), 3 MID (right), 4 FWD (centre)
+#   1-1-2: 0 GK, 1 DEF, 2 MID (centre), 3 FWD (left), 4 FWD (right)
+FORMATION = os.getenv("FORMATION", "1-2-1")
+if FORMATION == "1-1-2":
+    ROLE = {0: "GK", 1: "DEF", 2: "MID", 3: "FWD", 4: "FWD"}
+    SIDE = {0: 0.0, 1: 0.0, 2: 0.0, 3: 1.0, 4: -1.0}     # +1 = left (attacking view)
+else:
+    ROLE = {0: "GK", 1: "DEF", 2: "MID", 3: "MID", 4: "FWD"}
+    SIDE = {0: 0.0, 1: 0.0, 2: 1.0, 3: -1.0, 4: 0.0}
 
 # Tunables. Distances are to the opponent goal centre.
-SHOOT_RANGE = {"DEF": 18.0, "MID": 23.0, "FWD1": 25.0, "FWD2": 25.0}
+SHOOT_RANGE = {"DEF": 18.0, "MID": 23.0, "FWD": 25.0}
 # Shoot on sight. In the sim this broke the 0-0 mirror (10W 6D 0L vs the plain plan).
 # Sim shot physics are guesses: if long shots just give the ball away live, set LONG_SHOTS=0.
 LONG_SHOTS = os.getenv("LONG_SHOTS", "1") == "1"
-LONG_SHOT_RANGE = {"DEF": 25.0, "MID": 38.0, "FWD1": 40.0, "FWD2": 40.0}
+LONG_SHOT_RANGE = {"DEF": 25.0, "MID": 38.0, "FWD": 40.0}
 PRESSURE_DIST = 4.0      # an opponent this close = under pressure
 SPRINT_MIN_STAMINA = 0.35
 
@@ -116,6 +125,7 @@ class View:
 
     def __init__(self, gs, team_id, pid, adaptive=True, force=None):
         self.team_id, self.pid, self.role = team_id, pid, ROLE.get(pid, "MID")
+        self.side = SIDE.get(pid, 0.0)                              # +1 left, -1 right, 0 centre
         self.s = 1.0 if team_id == 0 else -1.0                    # attack direction
         self.opp_goal = (HALF_X * self.s, 0.0)
         self.my_goal = (-HALF_X * self.s, 0.0)
@@ -342,7 +352,7 @@ def _on_ball(v):
     # mate is clearly better placed.
     quick_def = v.role == "DEF" and v.style != "patient"
     if bp and (quick_def or pressured or bp[1] > 18):
-        kind = "THROUGH" if v.mates[bp[0]] and bp[0] in (3, 4) and bp[2] > 5 else "GROUND"
+        kind = "THROUGH" if v.mates[bp[0]] and ROLE.get(bp[0]) == "FWD" and bp[2] > 5 else "GROUND"
         return v.c("PASS", target_player_id=bp[0], type=kind)
     if pressured and v.role == "DEF":
         # Nobody open and under pressure deep: hoof it to the furthest forward.
@@ -391,8 +401,8 @@ def _gk(v):
 def _support(v):
     """A teammate has the ball: get open."""
     bx, by = v.ball
-    if v.role in ("FWD1", "FWD2"):
-        side = 1.0 if v.role == "FWD1" else -1.0
+    if v.role == "FWD":
+        side = v.side                      # 0 = lone central striker
         if v.mode == "protect":
             # Winning late: show for short passes near halfway instead of running in behind.
             return v.c("MOVE_TO", target_x=round(v.fwd(65), 1), target_y=12.0 * side * v.s, sprint=False)
@@ -403,7 +413,15 @@ def _support(v):
             tx = v.fwd(85)                 # arrive at the edge of the box for a shot
         elif v.style == "patient":
             tx = v.fwd(80)                 # they sit deep: join the attack
-        return v.c("MOVE_TO", target_x=round(tx, 1), target_y=round(-by * 0.5, 1), sprint=v.mode == "chase")
+        ty = -by * 0.5
+        if v.side:
+            # Two mids: each holds a channel (y = +-12). Ball-side mid sits just behind the ball
+            # (safe option), far-side mid moves ahead of it (forward option).
+            ty = 12.0 * v.side * v.s
+            ball_my_side = (by * v.s) * v.side > 0
+            if v.mode not in ("chase",) and v.style != "patient" and not ball_my_side:
+                tx = _clamp(bx + v.s * 4.0, -45, 45)
+        return v.c("MOVE_TO", target_x=round(tx, 1), target_y=round(ty, 1), sprint=v.mode == "chase")
     # DEF: hold a safe line behind the ball. Chasing: join the attack as an extra midfielder.
     if v.mode == "chase":
         gap, cap = 10.0, 75.0
@@ -427,7 +445,7 @@ def _defend(v):
             tx = v.ball[0] + v.ball_v[0] * 0.5
             ty = v.ball[1] + v.ball_v[1] * 0.5
             return v.c("MOVE_TO", target_x=round(tx, 1), target_y=round(ty, 1), sprint=True)
-        if v.role in ("FWD1", "FWD2"):
+        if v.role == "FWD":
             return _hold_high(v)
         if v.role == "MID" and _d(me, v.ball) < 15:
             return v.c("INTERCEPT", aggressive=True)
@@ -476,12 +494,14 @@ def _shape(v):
         depth = 0.45                       # sit deeper, absorb, then break
     tx = v.my_goal[0] + (bx - v.my_goal[0]) * depth
     ty = by * (0.4 if v.role == "DEF" else 0.6)
+    if v.role == "MID":
+        ty = _clamp(ty + 8.0 * v.side * v.s, -30, 30)   # two mids: one each side of the ball
     return v.c("MOVE_TO", target_x=round(tx, 1), target_y=round(ty, 1), sprint=False)
 
 
 def _hold_high(v, depth=60):
     """Forwards stay near halfway (or higher), split wide, ready for a counter."""
-    y = (8.0 if v.role == "FWD1" else -8.0) * v.s
+    y = 8.0 * v.side * v.s                 # lone striker (side 0) stays central
     if depth > 60:
         y *= 1.5                           # wider when staying high, harder to mark both
     return v.c("MOVE_TO", target_x=round(v.fwd(depth), 1), target_y=y, sprint=False)
@@ -522,6 +542,7 @@ def facts(game_state, team_id, player_id):
     bp = _best_pass(v) if v.i_have_ball else None
     return {
         "role": v.role,
+        "side": v.side,
         "hasBall": v.i_have_ball,
         "ballOwner": ("me" if v.i_have_ball else "team" if v.holder_mine
                       else "loose" if v.holder is None else "opponent"),
