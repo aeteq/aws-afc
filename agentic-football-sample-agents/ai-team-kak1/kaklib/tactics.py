@@ -117,7 +117,10 @@ CHASE_SHOOT_BONUS = 4.0  # shoot from further when chasing a goal
 
 # Adaptive style: read the opponent from each snapshot and switch.
 # All 5 agents see the same snapshot and run this code, so they agree without talking.
-KEEPER_OUT_ON, KEEPER_OUT_OFF = 8.0, 5.0   # their GK this far off his line = shoot from range
+# Live keepers stand ~0.6-1.5 live units (5-12 doc) off their line just by tracking the ball
+# (our GK: x -6.40..-5.50, median -5.99), so 8/5 doc would read "keeper out" most of the match.
+KEEPER_OUT_ON, KEEPER_OUT_OFF = 16.0, 12.0   # their GK this far off his line = shoot from range
+
 KEEPER_OUT_SHOOT_BONUS = 4.0
 COMMITTED_ON, COMMITTED_OFF = 3, 1         # their outfielders in our half -> counter
 PRESSED_DIST, PRESSED_COUNT = 8.0, 2       # this many opponents near our carrier -> release long
@@ -446,10 +449,31 @@ def _clear_own_box(v):
     return v.c("SHOOT", aim_location="CENTER", power=1.0)
 
 
+def _kickoff_pass(v):
+    """Our kick-off, taken live by the FWD: ball on the centre spot, every opponent still in
+    his own half. Play it back to the more open midfielder instead of carrying it into four
+    opponents (live, model turns: kick-off carries lost 4 of 5, passes back kept 2 of 3)."""
+    if v.role != "FWD" or _d(v.ball, (0.0, 0.0)) > 5.0:
+        return None
+    me, opps = _pos(v.me), v.opp_positions()
+    if any(o[0] * v.s < 0 for o in opps):
+        return None
+    cands = [i for i in v.mates if ROLE.get(i) == "MID" and _d(me, _pos(v.mates[i])) >= 5
+             and _lane_clear(me, _pos(v.mates[i]), opps) >= 2.5]
+    if not cands:
+        return None
+    i = max(cands, key=lambda i: min((_d(_pos(v.mates[i]), o) for o in opps), default=20.0))
+    return v.c("PASS", target_player_id=i, type=_pass_type(v, (i, 0.0, _lane_clear(me, _pos(v.mates[i]), opps))))
+
+
 def _on_ball(v):
     me = _pos(v.me)
     if _d(me, v.my_goal) < OWN_BOX:
         return _clear_own_box(v)
+    ko = _kickoff_pass(v)
+    if ko is not None:
+        return ko
+
     to_goal = _d(me, v.opp_goal)
     if to_goal < v.shoot_range():
         return _shot(v)
