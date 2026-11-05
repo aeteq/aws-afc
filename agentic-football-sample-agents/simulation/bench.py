@@ -134,9 +134,9 @@ def _row(results):
 
 # --- base version from git -----------------------------------------------------------------
 
-def _export_base(ref: str, team_dir: str, dest: str) -> str:
-    """Extract REF's team folder and lib/ into dest; return the base sim_team.py path."""
-    rel_team = os.path.relpath(os.path.abspath(team_dir), SAMPLES)
+def _export_base(ref: str, rel_team: str, dest: str) -> str:
+    """Extract REF's team folder (relative to agentic-football-sample-agents/) and lib/ into
+    dest; return the base sim_team.py path."""
     paths = [f"{REPO_PREFIX}/{rel_team}", f"{REPO_PREFIX}/lib"]
     top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=HERE,
                          capture_output=True, text=True, check=True).stdout.strip()
@@ -166,6 +166,9 @@ def main():
                     help="team folder with a sim_team.py (default: ai-team-kak1)")
     ap.add_argument("--base", default="origin/main",
                     help="git ref to compare against, or 'none' (default: origin/main)")
+    ap.add_argument("--base-team", help="team folder in the repo to take BASE from, relative to "
+                    "agentic-football-sample-agents/ (default: the same as --team). Needed when "
+                    "--team is a copy outside the repo, e.g. --base-team ai-team-kak1")
     ap.add_argument("--seeds", type=int, default=20, help="matches per side per opponent (default 20)")
     ap.add_argument("--seed", type=int, default=1, help="first seed (default 1)")
     ap.add_argument("--opponents", default=",".join(BUILTINS),
@@ -185,7 +188,11 @@ def main():
             specs[o] = "py:" + AWS_FALLBACK if o == "aws" else o
         has_base = args.base.lower() != "none"
         if has_base:
-            specs["base"] = "py:" + _export_base(args.base, args.team, tmp)
+            rel = args.base_team or os.path.relpath(os.path.abspath(args.team), SAMPLES)
+            if rel.startswith(".."):
+                raise SystemExit("--team is outside the repo: say which repo team is the base, "
+                                 "e.g. --base-team ai-team-kak1")
+            specs["base"] = "py:" + _export_base(args.base, rel, tmp)
 
         seeds = range(args.seed, args.seed + args.seeds)
         jobs = []
