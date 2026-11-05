@@ -494,11 +494,14 @@ def _gk(v):
         me = _pos(v.me)
         opps = v.opp_positions()
         cands = [(i, p) for i, p in v.mates.items() if i != 0]
+        # Outside our box first: a throw to a mate in the crowd near goal was lost (live 2 of 3).
+        out = [ip for ip in cands if _d(_pos(ip[1]), v.my_goal) >= OWN_BOX]
+        cands = out or cands
         def openness(ip):
             tp = _pos(ip[1])
             return min((_d(tp, o) for o in opps), default=20) + _lane_clear(me, tp, opps)
         target, p = max(cands, key=openness)
-        method = "THROW" if _d(me, _pos(p)) < 25 else "KICK"
+        method = "KICK"           # aerial: live THROW lost 2 of 3, ground passes 21 of 27
         if v.pressure() < 2 * PRESSURE_DIST:            # opponent close: kick it long, out of danger
             far = v.most_advanced_mate(min_lane=1.0)
             if far is not None:
