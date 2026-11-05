@@ -101,7 +101,12 @@ SHOOT_RANGE = {"DEF": 20.0, "MID": 30.0, "FWD": 32.0}
 LONG_SHOTS = os.getenv("LONG_SHOTS", "0") == "1"        # off: long shots never scored live
 LONG_SHOT_RANGE = {"DEF": 25.0, "MID": 38.0, "FWD": 40.0}
 OWN_BOX = 18.0           # "our penalty area": within this of our goal centre (documented scale)
-DEF_THIRD = 37.0         # depth from our goal line that counts as our defensive third
+DEF_THIRD = 37.0
+# Rest defence (all 8 goals against so far came 1-2 ticks after we lost the ball, with only
+# DEF + GK behind it): while we have the ball the DEF stays at most this deep from our goal...
+DEF_REST_MAX = 27.0
+# ...and a chaser never runs onto our own goal line (practice 2: DEF told to -6.77 live).
+RECOVER_MIN = 10.0         # depth from our goal line that counts as our defensive third
 PRESSURE_DIST = 4.0      # an opponent this close = under pressure
 SPRINT_MIN_STAMINA = 0.35
 
@@ -541,7 +546,15 @@ def _support(v):
             ty = 12.0 * v.side * v.s
             ball_my_side = (by * v.s) * v.side > 0
             if v.mode not in ("chase",) and v.style != "patient" and not ball_my_side:
-                tx = _clamp(bx + v.s * 4.0, -45, 45)
+                # Far-side mid gets ahead only when it's safe: ball past halfway AND the other
+                # mid is behind the ball. Otherwise both stay behind it (rest defence).
+                other = next((i for i in v.mates if ROLE.get(i) == "MID" and i != v.pid), None)
+                carrier = _player_idx(v.holder) if v.holder is not None else None
+                other_behind = (other is not None and other != carrier
+                                and (_pos(v.mates[other])[0] - bx) * v.s < -6.0)   # real cover, not the carrier
+                past_half = (bx - v.my_goal[0]) * v.s > HALF_X
+                if past_half and other_behind:
+                    tx = _clamp(bx + v.s * 4.0, -45, 45)
         # Corner trap fix: ball in our defensive third -> mids stay AHEAD of it as outlets
         # (practice 2: both mids dropped to x -45 next to our DEF, so he could only hoof it).
         ball_depth = (bx - v.my_goal[0]) * v.s
@@ -557,7 +570,7 @@ def _support(v):
     elif v.style == "patient":
         gap, cap = 15.0, 55.0              # they sit deep: hold the halfway line
     else:
-        gap, cap = 25.0, 45.0
+        gap, cap = 25.0, DEF_REST_MAX      # rest defence: never far up while we have the ball
     tx = v.fwd(_clamp((bx - v.my_goal[0]) * v.s - gap, 18.0, cap))
     return v.c("MOVE_TO", target_x=round(tx, 1), target_y=round(by * 0.3, 1), sprint=False)
 
@@ -570,9 +583,12 @@ def _defend(v):
 
     if loose:
         if chaser == v.pid:
-            # Run to where the ball will be in half a second.
+            # Run to where the ball will be in half a second, but not onto our own goal line
+            # (the GK covers that; a defender on the line can't stop a shot).
             tx = v.ball[0] + v.ball_v[0] * 0.5
             ty = v.ball[1] + v.ball_v[1] * 0.5
+            if v.role != "GK":
+                tx = v.fwd(max((tx - v.my_goal[0]) * v.s, RECOVER_MIN))
             return v.c("MOVE_TO", target_x=round(tx, 1), target_y=round(ty, 1), sprint=True)
         if v.role == "FWD":
             return _hold_high(v)

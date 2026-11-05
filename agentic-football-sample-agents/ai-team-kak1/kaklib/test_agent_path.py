@@ -399,6 +399,25 @@ finally:
         setattr(t, k, v)
 
 
+# 5f. rest defence (practice-2 goal at t=106, live units, we are home, MIDL on the ball at +1.4)
+import os as _os  # noqa: E402
+_old = (t.SCALE_X, t.SCALE_Y)
+t.SCALE_X, t.SCALE_Y = 55 / 7.0, 35 / 4.45
+try:
+    rd = {"gameTime": 100, "score": {"home": 1, "away": 0}, "teamChat": [], "players": [
+        {"agentId": f"agentId_{i}", "teamCode": c, "velocity": {"x": 0, "y": 0}, "stamina": 70, "position": {"x": x, "y": y}}
+        for c, b in (("home", {0: (-6.03, 0.36), 1: (-3.58, -0.26), 2: (1.14, 1.54), 3: (-1.25, -1.52), 4: (2.02, 0.06)}),
+                     ("away", {0: (6.3, 0), 1: (3.0, 1.0), 2: (2.5, -1.0), 3: (0.5, 2.0), 4: (-1.0, 0.0)}))
+        for i, (x, y) in b.items()],
+        "ball": {"position": {"x": 1.37, "y": 1.54, "z": 0}, "velocity": {"x": 0, "y": 0}, "isFree": False, "possessionAgentId": "agentId_2"}}
+    d = t.decide(rd, 0, 1)[0]["parameters"]["target_x"]
+    m = t.decide(rd, 0, 3)[0]["parameters"]["target_x"]
+    check(f"rest defence: DEF stays deep while we attack ({d})", d <= -3.3)
+    check(f"rest defence: far-side MID stays behind the ball when the other MID carries it ({m})", m < 1.37)
+finally:
+    t.SCALE_X, t.SCALE_Y = _old
+
+
 # 6. live match length: protect/chase run in the last 20% of a 120 s match
 m = state(holder=3)
 m["score"] = {"home": 1, "away": 0}
