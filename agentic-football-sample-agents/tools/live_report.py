@@ -143,6 +143,31 @@ def report(match, idx):
             print(f"  our GK:          x {min(p[0] for p in gk):+.2f}..{max(p[0] for p in gk):+.2f}, "
                   f"median {statistics.median(p[0] for p in gk):+.2f}")
 
+    if any("ball_h" in r for r in dec):
+        print("  (new logs: ball = [x, sideways]; ball_h = height)")
+    else:
+        print("  (old logs: the ball's second number is its HEIGHT, not sideways)")
+
+    # Shots: distance to their goal, and what happened in the next 3 ticks.
+    s_dir = 1 if team == 0 else -1
+    half = max((abs(p[0]) for p in xs), default=7.0) if xs else 7.0
+    half = 7.0 if half < 10 else 55.0
+    ts = sorted({(r.get("t") or 0) for r in dec})
+    shots = [r for r in dec if r.get("cmd") == "SHOOT" and r.get("me")]
+    print(f"\nShots: {len(shots)} (distance to their goal, live units; doc = x{55 / half:.1f})")
+    for r in sorted(shots, key=lambda r: r.get("t") or 0):
+        me = r["me"]
+        dist = ((half * s_dir - me[0]) ** 2 + me[1] ** 2) ** 0.5
+        after = [x for x in ts if x > (r.get("t") or 0)][:3]
+        ours = "home" if team == 0 else "away"
+        sc0 = (r.get("score") or {}).get(ours, 0)
+        nxt = [x for x in dec if (x.get("t") or 0) in after]
+        scored = any((x.get("score") or {}).get(ours, 0) > sc0 for x in nxt)
+        owners = Counter(x.get("owner") for x in nxt)
+        print(f"  t={r.get('t'):<4} pid {r['pid']} {ROLE.get(r['pid'], ''):5s} from {dist:5.2f} "
+              f"(doc {dist * 55 / half:4.0f})  {'GOAL' if scored else 'no goal'}  next owner: "
+              + ", ".join(f"{k} {v}" for k, v in owners.most_common()))
+
     print("\nGoals (the 3 decision ticks before each; positions are live units)")
     goals, prev = [], None
     for r in sorted(dec, key=lambda r: (r.get("t") or 0, r["_ts"])):
