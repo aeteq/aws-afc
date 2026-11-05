@@ -248,8 +248,11 @@ class View:
         committed = sticky("committed", in_our_half, COMMITTED_ON, COMMITTED_OFF)
         self.keeper_out = sticky("keeper_out", gk_off_line, KEEPER_OUT_ON, KEEPER_OUT_OFF)
         # Deep block can only be judged while we have the ball; otherwise keep the last reading.
-        deep = (in_their_half >= len(outfield) and len(outfield) > 0) if self.holder_mine \
-            else bool(was.get("deep"))
+        # Not at a kick-off: every opponent stands in his own half by rule, which read as "deep"
+        # and sent both mids forward (live match 9, t=70: kick-off lost at once).
+        kickoff = gs.get("playMode") == "KICK_OFF"
+        deep = (in_their_half >= len(outfield) and len(outfield) > 0) \
+            if self.holder_mine and not kickoff else bool(was.get("deep"))
         if self.i_have_ball:
             me = _pos(self.me)
             self.pressed = sum(1 for o in self.opp_positions() if _d(o, me) < PRESSED_DIST) >= PRESSED_COUNT
