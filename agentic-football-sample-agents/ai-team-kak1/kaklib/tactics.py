@@ -13,7 +13,35 @@ import re
 
 from state import _is_my_team, _player_idx
 
-HALF_X, HALF_Y = 55.0, 35.0
+HALF_X, HALF_Y = 55.0, 35.0     # the pitch our rules are tuned for (the documented one)
+
+# The live pitch is shorter than documented: in real matches the ball stays within x +-7 and
+# goals go in at x ~ -7 / +7 (match logs 2026-11-05). We scale x up to the documented pitch on
+# the way in and scale MOVE_TO x back down on the way out, so every distance in this file
+# keeps its meaning. y is left alone (players reach |y| 14 live). PITCH_HALF_X=55 = no scaling.
+PITCH_HALF_X = float(os.getenv("PITCH_HALF_X", "7.0"))
+SCALE_X = HALF_X / PITCH_HALF_X
+
+
+def _scale_state(gs):
+    """Copy of the game state with every x (positions, velocities) on the documented scale."""
+    if SCALE_X == 1.0 or not gs:
+        return gs
+    def sx(d):
+        return dict(d, x=d.get("x", 0.0) * SCALE_X) if isinstance(d, dict) else d
+    out = dict(gs)
+    ball = dict(gs.get("ball") or {})
+    for k in ("position", "velocity"):
+        if k in ball:
+            ball[k] = sx(ball[k])
+    out["ball"] = ball
+    out["players"] = [dict(p, position=sx(p.get("position") or {}), velocity=sx(p.get("velocity") or {}))
+                      for p in gs.get("players") or []]
+    return out
+
+
+def _real_x(x):
+    return x / SCALE_X
 # Formation. Roles come from the player id the server sends, not the agent folder name.
 #   1-2-1: 0 GK, 1 DEF, 2 MID (left), 3 MID (right), 4 FWD (centre)
 #   1-1-2: 0 GK, 1 DEF, 2 MID (centre), 3 FWD (left), 4 FWD (right)
@@ -31,6 +59,7 @@ SHOOT_RANGE = {"DEF": 18.0, "MID": 23.0, "FWD": 25.0}
 # Sim shot physics are guesses: if long shots just give the ball away live, set LONG_SHOTS=0.
 LONG_SHOTS = os.getenv("LONG_SHOTS", "1") == "1"
 LONG_SHOT_RANGE = {"DEF": 25.0, "MID": 38.0, "FWD": 40.0}
+OWN_BOX = 18.0           # "our penalty area": within this of our goal centre (documented scale)
 DEF_THIRD = 37.0         # depth from our goal line that counts as our defensive third
 PRESSURE_DIST = 4.0      # an opponent this close = under pressure
 SPRINT_MIN_STAMINA = 0.35
@@ -125,6 +154,7 @@ class View:
     """The game state from one player's point of view."""
 
     def __init__(self, gs, team_id, pid, adaptive=True, force=None):
+        gs = _scale_state(gs)                                       # live pitch -> documented scale
         self.team_id, self.pid, self.role = team_id, pid, ROLE.get(pid, "MID")
         self.side = SIDE.get(pid, 0.0)                              # +1 left, -1 right, 0 centre
         self.s = 1.0 if team_id == 0 else -1.0                    # attack direction
@@ -225,6 +255,8 @@ class View:
 
     # --- small helpers ---
     def c(self, kind, **params):
+        if kind == "MOVE_TO" and "target_x" in params:            # documented scale -> live pitch
+            params["target_x"] = round(_real_x(params["target_x"]), 2)
         return [cmd(kind, self.team_id, self.pid, **params)]
 
     def fwd(self, x):
@@ -274,7 +306,11 @@ class View:
         return rank < (3 if self.mode == "chase" else 2)
 
     def shot_allowed(self):
-        return self.i_have_ball and _d(_pos(self.me), self.opp_goal) < self.shoot_range()
+        if not self.i_have_ball:
+            return False
+        me = _pos(self.me)
+        # in range of their goal, or a clearance out of our own box
+        return _d(me, self.opp_goal) < self.shoot_range() or _d(me, self.my_goal) < OWN_BOX
 
     def allows(self, cmd):
         kind = cmd.get("commandType")
@@ -334,8 +370,23 @@ def _best_pass(v, min_lane=2.5):
     return best
 
 
+def _clear_own_box(v):
+    """Ball in our box: get it out. Lofted pass to a free teammate outside the box, otherwise
+    a full-power SHOOT upfield as a clearance (how we were conceding: ball stuck near our goal)."""
+    me, opps = _pos(v.me), v.opp_positions()
+    outs = [i for i in v.mates if i not in (0, v.pid)
+            and _d(_pos(v.mates[i]), v.my_goal) >= OWN_BOX
+            and _lane_clear(me, _pos(v.mates[i]), opps) >= 2.0]
+    if outs:
+        best = max(outs, key=lambda i: min((_d(_pos(v.mates[i]), o) for o in opps), default=20))
+        return v.c("PASS", target_player_id=best, type="AERIAL")
+    return v.c("SHOOT", aim_location="CENTER", power=1.0)
+
+
 def _on_ball(v):
     me = _pos(v.me)
+    if _d(me, v.my_goal) < OWN_BOX:
+        return _clear_own_box(v)
     to_goal = _d(me, v.opp_goal)
     if to_goal < v.shoot_range():
         return _shot(v)
@@ -390,6 +441,10 @@ def _gk(v):
             return min((_d(tp, o) for o in opps), default=20) + _lane_clear(me, tp, opps)
         target, p = max(cands, key=openness)
         method = "THROW" if _d(me, _pos(p)) < 25 else "KICK"
+        if v.pressure() < 2 * PRESSURE_DIST:            # opponent close: kick it long, out of danger
+            far = v.most_advanced_mate(min_lane=1.0)
+            if far is not None:
+                target, method = far, "KICK"
         return v.c("GK_DISTRIBUTE", target_player_id=target, method=method)
     # Loose ball close to goal and we'd get there first: go and claim it.
     bd = _d(v.ball, v.my_goal)
@@ -573,10 +628,13 @@ def facts(game_state, team_id, player_id):
         "oppKeeperOut": v.keeper_out,
         "mode": v.mode,                    # normal | chase (need a goal) | protect (keep the lead)
         # Positions so the model can judge where to move and whom to mark. Rounded to keep it short.
-        "me": [round(me[0]), round(me[1])],
-        "ball": [round(v.ball[0]), round(v.ball[1])],
-        "mates": {i: [round(_pos(p)[0]), round(_pos(p)[1])] for i, p in sorted(v.mates.items()) if i != v.pid},
-        "opps": {i: [round(_pos(p)[0]), round(_pos(p)[1])] for i, p in sorted(v.opps.items())},
+        # Positions on the LIVE pitch (what the model must answer in).
+        "me": [round(_real_x(me[0]), 1), round(me[1], 1)],
+        "ball": [round(_real_x(v.ball[0]), 1), round(v.ball[1], 1)],
+        "mates": {i: [round(_real_x(_pos(p)[0]), 1), round(_pos(p)[1], 1)] for i, p in sorted(v.mates.items()) if i != v.pid},
+        "opps": {i: [round(_real_x(_pos(p)[0]), 1), round(_pos(p)[1], 1)] for i, p in sorted(v.opps.items())},
+        "pitchHalfLengthX": PITCH_HALF_X,
+        "inOwnBox": _d(me, v.my_goal) < OWN_BOX,
         "score": game_state.get("score", {}),
         "gameTime": game_state.get("gameTime", 0),
     }

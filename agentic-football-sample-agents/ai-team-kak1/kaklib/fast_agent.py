@@ -70,7 +70,7 @@ SHOOT{{aim_location:"TL"|"TR"|"BL"|"BR",power:0.0-1.0}}
 PRESS_BALL{{intensity:0.0-1.0}}
 MARK{{target_player_id:opponent id 1-4,tightness:"TIGHT"|"LOOSE"}}
 INTERCEPT{{aggressive:true|false}}
-Pitch x -55..55, y -35..35. FACTS has positions: me, ball, mates and opps as id: [x, y].
+Pitch x -{half}..{half} (goals at the two ends), y -35..35. FACTS has positions: me, ball, mates and opps as id: [x, y].
 You attack toward FACTS.attackDirection.
 Reply with ONLY a JSON array of one command, e.g.
 [{{"commandType":"MOVE_TO","playerId":{pid},"parameters":{{"target_x":20,"target_y":5,"sprint":true}}}}]"""
@@ -103,7 +103,7 @@ def _new_agent(role, pid):
     from strands import Agent
     # New Agent per call = no history (stateless, small prompt, safe under parallel calls).
     return Agent(model=_get_model(), callback_handler=None, retry_strategy=None,
-                 system_prompt=BASE_PROMPT.format(role=role, pid=pid,
+                 system_prompt=BASE_PROMPT.format(role=role, pid=pid, half=tactics.PITCH_HALF_X,
                                                   role_notes=ROLE_NOTES.get(role, "")))
 
 
@@ -188,6 +188,16 @@ def _validate(raw_cmd, team_id, pid, has_ball):
 _seen_payload = False
 
 
+def _where(game_state, team_id, pid):
+    """Live-pitch positions for the decision log, so a bad match can be read back."""
+    try:
+        f = tactics.facts(game_state, team_id, pid) or {}
+        return {"t": round(game_state.get("gameTime") or 0), "me": f.get("me"), "ball": f.get("ball"),
+                "owner": f.get("ballOwner"), "team": team_id, "score": game_state.get("score")}
+    except Exception:  # logging must never break a decision
+        return {}
+
+
 class _Busy(Exception):
     pass
 
@@ -199,7 +209,8 @@ async def decide(game_state, team_id, pid):
     source, out, raw = "rule", fallback, None
 
     # Final without the model: the goalkeeper (fully coded), and shots.
-    hard = f and (pid == 0 or fallback[0]["commandType"] == "SHOOT")
+    # Final without the model: the goalkeeper, shots, and clearing our own box.
+    hard = f and (pid == 0 or fallback[0]["commandType"] == "SHOOT" or (f["hasBall"] and f.get("inOwnBox")))
     if f and not hard:
         msg = json.dumps({"FACTS": f, "SUGGESTION": fallback[0],
                           "COACH": tactics.coach_messages(game_state.get("teamChat"), team_id)[-1:]})
@@ -233,6 +244,7 @@ async def decide(game_state, team_id, pid):
             source = f"fallback_error:{type(e).__name__}"
     log.info(json.dumps({"pid": pid, "src": source, "ms": round((time.perf_counter() - t0) * 1000),
                          "cmd": out[0]["commandType"], "tick": game_state.get("tick"),
+                         "params": out[0].get("parameters"), **_where(game_state, team_id, pid),
                          "raw": (raw or "")[:120]}))
     return out
 

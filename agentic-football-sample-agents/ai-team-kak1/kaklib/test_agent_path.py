@@ -2,6 +2,7 @@
 model timeouts, and player selection. Run: python test_agent_path.py (no AWS needed)."""
 import asyncio, json, os, sys, threading, time
 
+os.environ.setdefault("PITCH_HALF_X", "55")   # tests use the documented pitch (no scaling)
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, "..", "..", "lib"))   # shared workshop lib
 sys.path.insert(0, _here)
@@ -250,4 +251,26 @@ check("myPlayers [0..4]: FWD1 agent controls player 3", run(3, [0, 1, 2, 3, 4]) 
 check("myPlayers [3]: controls 3", run(3, [3]) == 3)
 check("myPlayers missing: controls its own id", run(1, []) == 1)
 
+
+
+# 5. own-box clearance (documented scale)
+cl = state()
+for p in cl["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_1":
+        p["position"] = {"x": -48, "y": 3}
+    if p["teamCode"] == "away":
+        p["position"] = {"x": -45 + 2 * int(p["agentId"][-1]), "y": 4 - int(p["agentId"][-1])}   # crowd our box
+for p in cl["players"]:
+    if p["teamCode"] == "home" and p["agentId"] in ("agentId_2", "agentId_3", "agentId_4"):
+        p["position"] = {"x": -44, "y": 2}                 # every mate inside / next to our box, lanes blocked
+cl["ball"].update(position={"x": -47.7, "y": 3, "z": 0}, isFree=False, possessionAgentId="agentId_1")
+c = t.decide(cl, 0, 1)[0]
+check("DEF on the ball in our box, nobody free: clears with SHOOT", c["commandType"] == "SHOOT")
+check("the clearance passes the shoot policy", t.allowed(cl, 0, 1, c))
+for p in cl["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_2":
+        p["position"] = {"x": -30, "y": -20}               # one mate free outside the box, open side
+c = t.decide(cl, 0, 1)[0]
+check("DEF in our box with a free mate outside: lofted pass to him",
+      c["commandType"] == "PASS" and c["parameters"]["target_player_id"] == 2)
 print(f"\n{passed} checks passed")
