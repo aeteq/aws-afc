@@ -47,10 +47,9 @@ API = "https://l3fmtx4zp0.execute-api.us-east-1.amazonaws.com/prod"
 AGENTS = ("gk", "def", "mid", "fwd1", "fwd2")
 OUT = os.path.join(HERE, "..", "matches")
 POLL_S, MATCH_TIMEOUT_S, LOG_LAG_S = 15, 15 * 60, 90
-# Status values seen: "starting" (30 s auto-start delay), "in_progress". A match is over only
-# when its status is one of these; anything else counts as still running.
-DONE = {"completed", "complete", "finished", "done", "ended", "cancelled", "canceled",
-        "failed", "error", "rejected", "aborted", "timeout", "timed_out"}
+# Status values seen while a match runs: "starting" (30 s auto-start delay), "in_progress".
+# Any other status (completed, cancelled, ...) means it is over.
+RUNNING = {"starting", "in_progress", "pending", "scheduled", "queued", "created", "waiting"}
 MATCH_WINDOW_S = 6 * 60      # --collect: logs from start-30 s to start+6 min
 
 
@@ -89,7 +88,7 @@ def practice_matches(token):
 def wait_idle(token):
     """Wait while one of our practice matches is in progress."""
     t0 = time.time()
-    while any(m.get("status") not in DONE for m in practice_matches(token)):
+    while any(m.get("status") in RUNNING for m in practice_matches(token)):
         if time.time() - t0 > MATCH_TIMEOUT_S:
             raise Stop("a practice match has been in progress for 15 min; not starting another")
         time.sleep(POLL_S)
@@ -105,7 +104,7 @@ def play(token, team_id, opponent):
         items = practice_matches(token)
         me = next((m for m in items if (m.get("match_id") or m.get("id")) == mid), None)
         status = (me or {}).get("status")
-        if status in DONE:
+        if status and status not in RUNNING:
             print(f"match {mid}: {status}", flush=True)
             return mid, me, started, time.time()
         if time.time() - started > MATCH_TIMEOUT_S:
