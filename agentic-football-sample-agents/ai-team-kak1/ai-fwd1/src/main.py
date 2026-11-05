@@ -11,8 +11,8 @@ for p in ("../../../lib",      # local: shared workshop lib
     sys.path.insert(0, os.path.normpath(os.path.join(_here, p)))
 
 os.environ.setdefault("MODEL_ID", "us.amazon.nova-micro-v1:0")
-os.environ.setdefault("LLM_TIMEOUT_MS", "1500")
-os.environ.setdefault("USE_MODEL", "0")                 # 1 = ask Nova Micro when no hard rule decides   # tick is ~2 s, server limit 5 s (docs disagree: ~500 ms)
+os.environ.setdefault("LLM_TIMEOUT_MS", "1500")   # tick is ~2 s, server limit 5 s (docs disagree: ~500 ms)
+os.environ.setdefault("USE_MODEL", "0")           # 1 = ask Nova Micro when no hard rule decides
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp  # noqa: E402
 from fast_agent import create_handler  # noqa: E402

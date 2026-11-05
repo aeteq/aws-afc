@@ -34,11 +34,11 @@ MODEL_ID = os.getenv("MODEL_ID", "us.amazon.nova-micro-v1:0")
 TIMEOUT_S = int(os.getenv("LLM_TIMEOUT_MS", "1500")) / 1000.0
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "120"))
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
-MAX_INFLIGHT = int(os.getenv("MAX_INFLIGHT", "2"))
+MAX_INFLIGHT = int(os.getenv("MAX_INFLIGHT", "2"))   # model calls still running in this process
 # Model off by default: live, it overrode our shape (ball-magnet presses), ~10% of replies were
 # invalid, and each call adds ~0.4 s model + ~0.6 s platform time on a 2 s tick. Turn it back on
 # (USE_MODEL=1) only if a live A/B shows it helps.
-USE_MODEL = os.getenv("USE_MODEL", "0") == "1"   # model calls still running in this process
+USE_MODEL = os.getenv("USE_MODEL", "0") == "1"
 
 # Own pool, not asyncio's default: asyncio.run() would otherwise wait for late calls on exit.
 _POOL = ThreadPoolExecutor(max_workers=MAX_INFLIGHT + 1, thread_name_prefix="llm")
@@ -197,6 +197,20 @@ def _validate(raw_cmd, team_id, pid, has_ball):
 
 
 _seen_payload = False
+_last_raw_t = None       # gameTime of the last full payload we logged (one per match)
+
+
+def _log_raw_payload(data):
+    """Log one full raw payload per match (when game time restarts), with real numbers.
+    Skips payloads without players, e.g. the portal's 'Test your agents' sample."""
+    global _last_raw_t
+    gs = data.get("gameState") or {}
+    t = gs.get("gameTime") or 0
+    if not gs.get("players") or (_last_raw_t is not None and t >= _last_raw_t):
+        _last_raw_t = t if gs.get("players") else _last_raw_t
+        return
+    _last_raw_t = t
+    log.info(json.dumps({"raw_payload": data})[:20000])
 
 
 def _where(game_state, team_id, pid):
@@ -285,6 +299,7 @@ def create_handler(app, default_pid):
                 "ball_keys": sorted((gs.get("ball") or {}).keys()),
                 "player_keys": sorted(((gs.get("players") or [{}])[0]).keys()),
                 "playMode": gs.get("playMode"), "gameTime": gs.get("gameTime")}}))
+        _log_raw_payload(data)
         pid = mine[0] if len(mine) == 1 else default_pid
         if len(mine) > 1:
             app.logger.warning(f"myPlayers has {len(mine)} ids; controlling {pid}")
