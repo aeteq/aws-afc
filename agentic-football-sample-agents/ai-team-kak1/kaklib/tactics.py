@@ -101,12 +101,12 @@ SHOOT_RANGE = {"DEF": 20.0, "MID": 30.0, "FWD": 32.0}
 LONG_SHOTS = os.getenv("LONG_SHOTS", "0") == "1"        # off: long shots never scored live
 LONG_SHOT_RANGE = {"DEF": 25.0, "MID": 38.0, "FWD": 40.0}
 OWN_BOX = 18.0           # "our penalty area": within this of our goal centre (documented scale)
-DEF_THIRD = 37.0
+DEF_THIRD = 37.0         # depth from our goal line that counts as our defensive third
 # Rest defence (all 8 goals against so far came 1-2 ticks after we lost the ball, with only
 # DEF + GK behind it): while we have the ball the DEF stays at most this deep from our goal...
 DEF_REST_MAX = 27.0
 # ...and a chaser never runs onto our own goal line (practice 2: DEF told to -6.77 live).
-RECOVER_MIN = 10.0         # depth from our goal line that counts as our defensive third
+RECOVER_MIN = 10.0       # outfield chasers stop this far (doc) from our goal line; GK covers it
 PRESSURE_DIST = 4.0      # an opponent this close = under pressure
 SPRINT_MIN_STAMINA = 0.35
 
