@@ -31,6 +31,7 @@ SHOOT_RANGE = {"DEF": 18.0, "MID": 23.0, "FWD": 25.0}
 # Sim shot physics are guesses: if long shots just give the ball away live, set LONG_SHOTS=0.
 LONG_SHOTS = os.getenv("LONG_SHOTS", "1") == "1"
 LONG_SHOT_RANGE = {"DEF": 25.0, "MID": 38.0, "FWD": 40.0}
+DEF_THIRD = 37.0         # depth from our goal line that counts as our defensive third
 PRESSURE_DIST = 4.0      # an opponent this close = under pressure
 SPRINT_MIN_STAMINA = 0.35
 
@@ -355,7 +356,14 @@ def _on_ball(v):
         kind = "THROUGH" if v.mates[bp[0]] and ROLE.get(bp[0]) == "FWD" and bp[2] > 5 else "GROUND"
         return v.c("PASS", target_player_id=bp[0], type=kind)
     if pressured and v.role == "DEF":
-        # Nobody open and under pressure deep: hoof it to the furthest forward.
+        # Under pressure, nobody clearly open: first a nearby midfielder with a half-clear
+        # lane (lofted over the presser), only then hoof it to the furthest forward.
+        me = _pos(v.me)
+        near = [i for i in v.mates if ROLE.get(i) == "MID" and _d(me, _pos(v.mates[i])) < 40
+                and _lane_clear(me, _pos(v.mates[i]), v.opp_positions()) >= 1.5]
+        if near:
+            best = max(near, key=lambda i: min((_d(_pos(v.mates[i]), o) for o in v.opp_positions()), default=20))
+            return v.c("PASS", target_player_id=best, type="AERIAL")
         far = max((i for i in v.mates if i != v.pid and i != 0),
                   key=lambda i: _pos(v.mates[i])[0] * v.s)
         return v.c("PASS", target_player_id=far, type="AERIAL")
@@ -421,6 +429,14 @@ def _support(v):
             ball_my_side = (by * v.s) * v.side > 0
             if v.mode not in ("chase",) and v.style != "patient" and not ball_my_side:
                 tx = _clamp(bx + v.s * 4.0, -45, 45)
+        # Corner trap fix: ball in our defensive third -> mids stay AHEAD of it as outlets
+        # (practice 2: both mids dropped to x -45 next to our DEF, so he could only hoof it).
+        ball_depth = (bx - v.my_goal[0]) * v.s
+        if ball_depth < DEF_THIRD:
+            ahead = 12.0 if (v.side == 0 or (by * v.s) * v.side > 0) else 20.0   # ball-side mid closer
+            tx = v.fwd(max((tx - v.my_goal[0]) * v.s, ball_depth + ahead, 25.0))
+            if v.side and (by * v.s) * v.side > 0:
+                ty = _clamp(by * 0.6, -30, 30)       # ball-side mid: short diagonal option
         return v.c("MOVE_TO", target_x=round(tx, 1), target_y=round(ty, 1), sprint=v.mode == "chase")
     # DEF: hold a safe line behind the ball. Chasing: join the attack as an extra midfielder.
     if v.mode == "chase":
