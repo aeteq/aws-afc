@@ -53,6 +53,15 @@ python simulator/run_match.py --team new=py:../../ai-team-kak1/sim_team.py \
 
 Matches are often 0-0 or 1-0, so judge on 16+ matches, not 2.
 
+Quicker: `bench.py` does this for you against a git ref, with no checkout. From `simulation/`:
+
+```bash
+python3 bench.py                      # ai-team-kak1 in the working tree vs origin/main
+python3 bench.py --base HEAD~3 --seeds 40
+```
+
+It plays both versions on the same seeds, home and away, against every built-in opponent, plus head to head, and prints W/D/L, points and goal difference per match with a 95% interval. Exit code 1 means a regression. Run it before every push that touches `ai-team-kak1/`. Play both sides: the engine moves home players first, which gives the away team an edge in every chase (kak1 vs itself: the away side wins).
+
 ## 3. Watch a replay
 
 ```bash
