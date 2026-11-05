@@ -249,7 +249,7 @@ class View:
         forced = force or _coach_style(self.chat, self.team_id)
         if forced and forced != "auto":
             self.style = forced
-        elif committed:
+        elif committed and False:                 # EXP3: no auto counter vs high-committing teams
             self.style = "counter"
         elif deep:
             self.style = "patient"
@@ -451,6 +451,10 @@ def _on_ball(v):
     # Direct: 2+ opponents on us, release long. Counter: won it in our half, hit the
     # furthest forward before they get back.
     own_half = me[0] * v.s < 0
+    if v.role == "DEF" and own_half:              # EXP1: DEF never plays short in our half
+        t = v.most_advanced_mate(min_lane=1.0)
+        if t is not None:
+            return v.c("PASS", target_player_id=t, type="AERIAL")
     if v.pressed or (v.style == "counter" and own_half):
         t = v.most_advanced_mate()
         if t is not None:
@@ -487,6 +491,9 @@ def _on_ball(v):
 
 def _gk(v):
     if v.i_have_ball:
+        far = v.most_advanced_mate(min_lane=1.0)  # EXP1: always kick long, never a short throw
+        if far is not None:
+            return v.c("GK_DISTRIBUTE", target_player_id=far, method="KICK")
         if v.style == "counter":                  # long kick to the forward left high
             t = v.most_advanced_mate()
             if t is not None:
