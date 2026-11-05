@@ -10,5 +10,7 @@ Football code lives in:
 
 - `agentic-football-sample-agents/` — sample teams and the shared `lib/`
 - `agentic-football-coach/` — the workshop's reference content
+- `agentic-football-sample-agents/ai-team-kak1/` — our team (`README.md` there)
+- `agentic-football-sample-agents/simulation/` — local match simulator; how to run it: `SIMULATION.md`
 
 The rest of the repo is unrelated upstream samples.

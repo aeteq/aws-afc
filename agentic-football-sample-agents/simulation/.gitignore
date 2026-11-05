@@ -1,0 +1,3 @@
+live/logs/
+*.html
+__pycache__/
