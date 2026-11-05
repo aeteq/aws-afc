@@ -519,6 +519,23 @@ def _gk(v):
 
 # --- off the ball ------------------------------------------------------------------------
 
+BALL_SIDE_DEADBAND = 4.0   # doc units (~0.5 live): inside it, "ball side" is not read from y
+
+
+def _ball_my_side(v):
+    """Am I the ball-side mid? From the ball's y when it is clearly on one side; when it is
+    central, the mid nearer the ball. Without the deadband the two mids swap roles (a 20+ m
+    jump) every time a central carrier's y changes sign, which live y noise does constantly."""
+    by = v.ball[1]
+    if abs(by) >= BALL_SIDE_DEADBAND:
+        return (by * v.s) * v.side > 0
+    mids = [i for i in v.mates if ROLE.get(i) == "MID" and SIDE.get(i)
+            and not (v.holder is not None and _player_idx(v.holder) == i)]
+    if v.pid not in mids:
+        return False
+    return min(mids, key=lambda i: (_d(_pos(v.mates[i]), v.ball), i)) == v.pid
+
+
 def _support(v):
     """A teammate has the ball: get open."""
     bx, by = v.ball
@@ -539,16 +556,16 @@ def _support(v):
             # Two mids: each holds a channel (y = +-12). Ball-side mid sits just behind the ball
             # (safe option), far-side mid moves ahead of it (forward option).
             ty = 12.0 * v.side * v.s
-            ball_my_side = (by * v.s) * v.side > 0
+            ball_my_side = _ball_my_side(v)
             if v.mode not in ("chase",) and v.style != "patient" and not ball_my_side:
                 tx = _clamp(bx + v.s * 4.0, -45, 45)
         # Corner trap fix: ball in our defensive third -> mids stay AHEAD of it as outlets
         # (practice 2: both mids dropped to x -45 next to our DEF, so he could only hoof it).
         ball_depth = (bx - v.my_goal[0]) * v.s
         if ball_depth < DEF_THIRD:
-            ahead = 12.0 if (v.side == 0 or (by * v.s) * v.side > 0) else 20.0   # ball-side mid closer
+            ahead = 12.0 if (v.side == 0 or _ball_my_side(v)) else 20.0   # ball-side mid closer
             tx = v.fwd(max((tx - v.my_goal[0]) * v.s, ball_depth + ahead, 25.0))
-            if v.side and (by * v.s) * v.side > 0:
+            if v.side and _ball_my_side(v):
                 ty = _clamp(by * 0.6, -30, 30)       # ball-side mid: short diagonal option
         return v.c("MOVE_TO", target_x=round(tx, 1), target_y=round(ty, 1), sprint=v.mode == "chase")
     # DEF: hold a safe line behind the ball. Chasing: join the attack as an extra midfielder.
