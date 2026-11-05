@@ -197,20 +197,35 @@ def _validate(raw_cmd, team_id, pid, has_ball):
 
 
 _seen_payload = False
-_last_raw_t = None       # gameTime of the last full payload we logged (one per match)
+_last_raw_t = None       # gameTime of the last payload seen (a drop = new match)
+_mid_logged = False      # logged this match's open-play payload yet?
 
 
 def _log_raw_payload(data):
     """Log one full raw payload per match (when game time restarts), with real numbers.
     Skips payloads without players, e.g. the portal's 'Test your agents' sample."""
-    global _last_raw_t
+    global _last_raw_t, _mid_logged
     gs = data.get("gameState") or {}
     t = gs.get("gameTime") or 0
-    if not gs.get("players") or (_last_raw_t is not None and t >= _last_raw_t):
-        _last_raw_t = t if gs.get("players") else _last_raw_t
+    if not gs.get("players"):
         return
+    new_match = _last_raw_t is None or t < _last_raw_t
     _last_raw_t = t
-    log.info(json.dumps({"raw_payload": data})[:20000])
+    if new_match:
+        _mid_logged = False
+        log.info(json.dumps({"raw_payload": data})[:20000])
+    elif not _mid_logged and t >= 20:      # one open-play payload too (kick-off uses other units)
+        _mid_logged = True
+        log.info(json.dumps({"raw_payload": data})[:20000])
+
+
+def _ball_height(game_state):
+    """Ball height (live payload y when its sideways axis is z). Its presence marks logs where
+    'ball' is [x, sideways] for real; older logs had the height in the second slot."""
+    bp = (game_state.get("ball") or {}).get("position") or {}
+    if tactics.BALL_LATERAL == "z" and "z" in bp:
+        return round(bp.get("y", 0.0), 2)
+    return None
 
 
 def _where(game_state, team_id, pid):
@@ -218,7 +233,8 @@ def _where(game_state, team_id, pid):
     try:
         f = tactics.facts(game_state, team_id, pid) or {}
         return {"t": round(game_state.get("gameTime") or 0), "me": f.get("me"), "ball": f.get("ball"),
-                "owner": f.get("ballOwner"), "team": team_id, "score": game_state.get("score")}
+                "owner": f.get("ballOwner"), "team": team_id, "score": game_state.get("score"),
+                "opps": f.get("opps"), "ball_h": _ball_height(game_state)}
     except Exception:  # logging must never break a decision
         return {}
 

@@ -26,9 +26,39 @@ SCALE_X = HALF_X / PITCH_HALF_X
 SCALE_Y = HALF_Y / PITCH_HALF_Y
 
 
+# The BALL's sideways axis is z live (y is its height: ~0.14 at rest, up to ~1.7 when lofted).
+# The local simulator uses y sideways and z = 0, so sim adapters set BALL_LATERAL=y.
+BALL_LATERAL = os.getenv("BALL_LATERAL", "z")
+
+
+def _ball_flat(d):
+    """Ball position/velocity as {x, y} with y = sideways (z when live and present)."""
+    if not isinstance(d, dict):
+        return d
+    if BALL_LATERAL == "z" and "z" in d:
+        return dict(d, y=d.get("z", 0.0), height=d.get("y", 0.0))
+    return d
+
+
+def _doc_scale_payload(gs):
+    """Kick-off payloads come on the documented scale (GK at x -50) while open play is ~8x
+    smaller (GK at ~-6 two seconds later). Nothing on the live pitch is beyond |x| 10."""
+    pts = [p.get("position") or {} for p in gs.get("players") or []]
+    return any(abs(q.get("x", 0.0)) > 10.0 for q in pts)
+
+
 def _scale_state(gs):
-    """Copy of the game state with every x and y (positions, velocities) on the documented scale."""
-    if (SCALE_X == 1.0 and SCALE_Y == 1.0) or not gs:
+    """Copy of the game state with the ball made flat (y = sideways) and every x and y
+    (positions, velocities) on the documented scale."""
+    if not gs:
+        return gs
+    gs = dict(gs)
+    ball = dict(gs.get("ball") or {})
+    for k in ("position", "velocity"):
+        if k in ball:
+            ball[k] = _ball_flat(ball[k])
+    gs["ball"] = ball
+    if (SCALE_X == 1.0 and SCALE_Y == 1.0) or _doc_scale_payload(gs):
         return gs
     def sx(d):
         if not isinstance(d, dict):
@@ -63,10 +93,11 @@ else:
     SIDE = {0: 0.0, 1: 0.0, 2: 1.0, 3: -1.0, 4: 0.0}
 
 # Tunables. Distances are to the opponent goal centre.
-SHOOT_RANGE = {"DEF": 18.0, "MID": 23.0, "FWD": 25.0}
+# Live: 7 shots from 33-44 doc units out, 0 goals (Pan's Claude live_report, 3 matches).
+SHOOT_RANGE = {"DEF": 16.0, "MID": 20.0, "FWD": 22.0}
 # Shoot on sight. In the sim this broke the 0-0 mirror (10W 6D 0L vs the plain plan).
 # Sim shot physics are guesses: if long shots just give the ball away live, set LONG_SHOTS=0.
-LONG_SHOTS = os.getenv("LONG_SHOTS", "1") == "1"
+LONG_SHOTS = os.getenv("LONG_SHOTS", "0") == "1"        # off: long shots never scored live
 LONG_SHOT_RANGE = {"DEF": 25.0, "MID": 38.0, "FWD": 40.0}
 OWN_BOX = 18.0           # "our penalty area": within this of our goal centre (documented scale)
 DEF_THIRD = 37.0         # depth from our goal line that counts as our defensive third
@@ -76,12 +107,12 @@ SPRINT_MIN_STAMINA = 0.35
 # Score/clock awareness. Set MATCH_SECONDS=120 if matches turn out to be 2 minutes.
 MATCH_SECONDS = float(os.getenv("MATCH_SECONDS", "120"))   # live matches end at ~120 s (logs)
 LATE_FRACTION = 0.2      # last 20% of the match counts as "late"
-CHASE_SHOOT_BONUS = 8.0  # shoot from further when chasing a goal
+CHASE_SHOOT_BONUS = 4.0  # shoot from further when chasing a goal
 
 # Adaptive style: read the opponent from each snapshot and switch.
 # All 5 agents see the same snapshot and run this code, so they agree without talking.
 KEEPER_OUT_ON, KEEPER_OUT_OFF = 8.0, 5.0   # their GK this far off his line = shoot from range
-KEEPER_OUT_SHOOT_BONUS = 10.0
+KEEPER_OUT_SHOOT_BONUS = 4.0
 COMMITTED_ON, COMMITTED_OFF = 3, 1         # their outfielders in our half -> counter
 PRESSED_DIST, PRESSED_COUNT = 8.0, 2       # this many opponents near our carrier -> release long
 STYLES = ("auto", "normal", "counter", "direct", "patient")
@@ -296,7 +327,7 @@ class View:
             r += CHASE_SHOOT_BONUS
         if self.keeper_out and self.role != "DEF" and self.mode != "protect":
             r += KEEPER_OUT_SHOOT_BONUS
-        return min(r, 45.0)                # past this, shots are just giveaways
+        return min(r, 26.0)                # past this, shots are just giveaways (live data)
 
     # --- the single press/shoot policy: rules and model are both held to it ---
     def press_allowed(self):
@@ -357,6 +388,22 @@ def _shot(v):
     return v.c("SHOOT", aim_location="BL" if lateral > 0 else "BR", power=1.0)
 
 
+GROUND_LANE_MIN = 6.0    # ground pass only with this much lane (doc units) ...
+GROUND_DIST_MAX = 15.0   # ... and this short. Live: 21 of 27 ground passes lost within 2 ticks.
+
+
+def _pass_type(v, bp):
+    """THROUGH to a forward with a clear lane; GROUND only when short and very clear; else AERIAL
+    (live: AERIAL 5 of 5 not lost immediately; GROUND 21 of 27 lost)."""
+    i, _, lane = bp
+    dist = _d(_pos(v.me), _pos(v.mates[i]))
+    if ROLE.get(i) == "FWD" and lane > 5:
+        return "THROUGH"
+    if lane >= GROUND_LANE_MIN and dist <= GROUND_DIST_MAX:
+        return "GROUND"
+    return "AERIAL"
+
+
 def _best_pass(v, min_lane=2.5):
     """Teammate that is open and ahead. Returns (pid, score, lane) or None."""
     me = _pos(v.me)
@@ -414,7 +461,7 @@ def _on_ball(v):
     # mate is clearly better placed.
     quick_def = v.role == "DEF" and v.style != "patient"
     if bp and (quick_def or pressured or bp[1] > 18):
-        kind = "THROUGH" if v.mates[bp[0]] and ROLE.get(bp[0]) == "FWD" and bp[2] > 5 else "GROUND"
+        kind = _pass_type(v, bp)
         return v.c("PASS", target_player_id=bp[0], type=kind)
     if pressured and v.role == "DEF":
         # Under pressure, nobody clearly open: first a nearby midfielder with a half-clear

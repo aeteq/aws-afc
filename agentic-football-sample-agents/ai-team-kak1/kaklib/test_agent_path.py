@@ -2,7 +2,8 @@
 model timeouts, and player selection. Run: python test_agent_path.py (no AWS needed)."""
 import asyncio, json, os, sys, threading, time
 
-os.environ.setdefault("PITCH_HALF_X", "55")   # tests use the documented pitch (no scaling)
+os.environ.setdefault("PITCH_HALF_X", "55")
+os.environ.setdefault("BALL_LATERAL", "y")   # tests use the documented pitch (no scaling)
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, "..", "..", "lib"))   # shared workshop lib
 sys.path.insert(0, _here)
@@ -86,7 +87,10 @@ for p in pr["players"]:
 pr["ball"]["position"] = {"x": fwd["x"] + 0.5, "y": 0, "z": 0}
 check("protect + keeper out: no shot from 31", t.decide(pr, 0, 3)[0]["commandType"] != "SHOOT")
 pr["score"] = {"home": 0, "away": 0}
-check("normal + keeper out: shoots from 31", t.decide(pr, 0, 3)[0]["commandType"] == "SHOOT")
+check("normal + keeper out: no long shot from 31 (long shots off)", t.decide(pr, 0, 3)[0]["commandType"] != "SHOOT")
+fwd["x"] = 55 - 22
+pr["ball"]["position"] = {"x": fwd["x"] + 0.5, "y": 0, "z": 0}
+check("normal + keeper out: shoots from 22", t.decide(pr, 0, 3)[0]["commandType"] == "SHOOT")
 
 # 2c. facts carry positions
 f2 = t.facts(state(holder=2), 0, 2)
@@ -286,6 +290,32 @@ check("DEF in our box with a free mate outside: lofted pass to him",
 # 5b. "duration" written inside parameters is moved up, not rejected
 d = raw('[{"commandType":"PASS","playerId":1,"parameters":{"target_player_id":2,"type":"GROUND","duration":0}}]', True, 1)
 check("PASS with duration inside parameters accepted", d and "duration" not in d[0]["parameters"] and d[0]["duration"] == 0)
+
+
+# 5d. live units: ball axes and kick-off scale
+def lat_of(gs, mode):
+    old = t.BALL_LATERAL
+    t.BALL_LATERAL = mode
+    try:
+        return t.View(gs, 0, 2).ball[1]
+    finally:
+        t.BALL_LATERAL = old
+live_shape = state(holder=2); live_shape["ball"]["position"] = {"x": -14.5, "y": 0.14, "z": 3.2}
+sim_shape = state(holder=2); sim_shape["ball"]["position"] = {"x": -14.5, "y": 3.2, "z": 0.0}
+check("live payload (z sideways): ball lateral = z", abs(lat_of(live_shape, "z") - 3.2) < 1e-9)
+check("sim payload (z = 0, y sideways): ball lateral = y", abs(lat_of(sim_shape, "y") - 3.2) < 1e-9)
+check("no z key: falls back to y", abs(lat_of(state(holder=2), "z") - 4) < 1e-9)
+old = (t.SCALE_X, t.SCALE_Y)
+t.SCALE_X, t.SCALE_Y = 55 / 7.0, 35 / 4.45
+try:
+    kick = state(holder=2); kick["players"][0]["position"] = {"x": -50, "y": 0}      # doc-scale kick-off
+    check("kick-off payload on doc scale is not rescaled", t.View(kick, 0, 0).me["position"]["x"] == -50)
+    live = state(holder=2)
+    for p in live["players"]:
+        p["position"] = {"x": p["position"]["x"] / 8, "y": p["position"]["y"] / 8}
+    check("open-play payload is rescaled", abs(t.View(live, 0, 0).me["position"]["x"] - (-50 / 8) * 55 / 7.0) < 1e-6)
+finally:
+    t.SCALE_X, t.SCALE_Y = old
 
 
 # 6. live match length: protect/chase run in the last 20% of a 120 s match

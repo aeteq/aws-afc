@@ -13,6 +13,7 @@ export AWS_REGION=${AWS_REGION:-us-east-1} AWS_DEFAULT_REGION=${AWS_DEFAULT_REGI
 # otherwise, so run it unscaled here. Other teams ignore this variable.
 export PITCH_HALF_X=${PITCH_HALF_X:-55}
 export MATCH_SECONDS=${MATCH_SECONDS:-300}   # simulator matches are 5 min (live ones are 120 s)
+export BALL_LATERAL=${BALL_LATERAL:-y}       # simulator ball: y sideways (live: z sideways, y height)
 i=0
 for agent in ai-gk ai-def ai-mid ai-fwd1 ai-fwd2; do
   python "$here/serve.py" "$team/$agent" $((base + i)) > "$here/logs/$name-$agent.log" 2>&1 &

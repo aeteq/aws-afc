@@ -2,7 +2,8 @@
 Run from ai-team-kak1/:  python3 ai-mid/test_local.py [--llm]"""
 import asyncio, json, os, sys, time
 
-os.environ.setdefault("PITCH_HALF_X", "55")   # sample state uses the documented pitch
+os.environ.setdefault("PITCH_HALF_X", "55")
+os.environ.setdefault("BALL_LATERAL", "y")   # sample state uses the documented pitch
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, "src"))
 import main  # noqa: E402  (builds the app + handler exactly as deployed)
