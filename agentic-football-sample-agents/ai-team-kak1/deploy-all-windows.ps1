@@ -101,7 +101,7 @@ Write-Host "Setting up deployment project..."
 if (Test-Path $BuildDir) { cmd /c "rmdir /s /q `"$BuildDir`"" 2>$null; Remove-Item -Recurse -Force $BuildDir -ErrorAction SilentlyContinue }
 
 # Use agentcore create to scaffold the CDK project
-$projectName = "aiteam"
+$projectName = "kak1"
 Push-Location (Split-Path $BuildDir -Parent)
 $buildDirName = Split-Path $BuildDir -Leaf
 $ErrorActionPreference = "Continue"
@@ -163,6 +163,12 @@ foreach ($agent in $allAgents) {
         robocopy $libSource $libDest /E /XD __pycache__ /NJH /NJS /NFL /NDL /NC /NS | Out-Null
     }
 
+    # kak1: our modules (tactics, fast_agent) on top of the shared lib
+    $kakSource = Join-Path $ScriptDir "kaklib"
+    $libDest = Join-Path $appDir "lib"
+    New-Item -ItemType Directory -Path $libDest -Force | Out-Null
+    robocopy $kakSource $libDest /E /XD __pycache__ /XF test_*.py /NJH /NJS /NFL /NDL /NC /NS | Out-Null
+
     # Create pyproject.toml
     @"
 [build-system]
@@ -205,7 +211,7 @@ $runtimes = $allAgents | ForEach-Object {
 $agentcoreJson = @"
 {
   "`$schema": "https://schema.agentcore.aws.dev/v1/agentcore.json",
-  "name": "aiteam",
+  "name": "$projectName",
   "version": 1,
   "managedBy": "CDK",
   "runtimes": [
@@ -278,7 +284,7 @@ if ($deployExitCode -eq 0) {
     $ErrorActionPreference = "Stop"
     foreach ($agent in $allAgents) {
         $agentNameClean = ($agent -replace '-', '_') + "_agent"
-        $match = $allRuntimes | Where-Object { $_.name -eq "aiteam_$agentNameClean" }
+        $match = $allRuntimes | Where-Object { $_.name -eq "$($projectName)_$agentNameClean" }
         if ($match) {
             $displayName = $agent.ToUpper() -replace 'AI-',''
             Write-Host "    $($displayName): $($match.arn)" -ForegroundColor White

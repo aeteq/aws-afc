@@ -11,6 +11,7 @@ Env vars: MODEL_ID, LLM_TIMEOUT_MS (default 1500; tick ~2 s, server limit 5 s pe
 """
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -22,7 +23,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ValidationError
 
 import tactics
-from parsing import parse_commands
+from parsing import _iter_array_candidates, _loads
 
 log = logging.getLogger("fast_agent")
 if not log.handlers:  # one JSON line per decision on stdout (CloudWatch when deployed)
@@ -62,10 +63,15 @@ Return the SUGGESTION unless you see a clearly better option. Rules:
 - FACTS.mode: chase = we need a goal, take risks; protect = keep the lead, play safe.
 - FACTS.style: counter = they push up, hit our forwards fast; patient = they sit deep, keep the ball.
 {role_notes}
-Commands: MOVE_TO{{target_x,target_y,sprint}} PASS{{target_player_id,type:GROUND|AERIAL|THROUGH}}
-SHOOT{{aim_location:TL|TR|BL|BR,power}} PRESS_BALL{{intensity}} MARK{{target_player_id,tightness:TIGHT|LOOSE}}
-INTERCEPT{{aggressive}} GK_DISTRIBUTE{{target_player_id,method:THROW|KICK}}
-Pitch x -55..55, y -35..35. You attack toward {{attackDirection}} given in FACTS.
+Commands (ALL parameters required; numbers are numbers, not words):
+MOVE_TO{{target_x:number,target_y:number,sprint:true|false}}
+PASS{{target_player_id:teammate id 1-4,type:"GROUND"|"AERIAL"|"THROUGH"}}
+SHOOT{{aim_location:"TL"|"TR"|"BL"|"BR",power:0.0-1.0}}
+PRESS_BALL{{intensity:0.0-1.0}}
+MARK{{target_player_id:opponent id 1-4,tightness:"TIGHT"|"LOOSE"}}
+INTERCEPT{{aggressive:true|false}}
+Pitch x -55..55, y -35..35. FACTS has positions: me, ball, mates and opps as id: [x, y].
+You attack toward FACTS.attackDirection.
 Reply with ONLY a JSON array of one command, e.g.
 [{{"commandType":"MOVE_TO","playerId":{pid},"parameters":{{"target_x":20,"target_y":5,"sprint":true}}}}]"""
 
@@ -121,18 +127,17 @@ _MATE = lambda v: isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 4
 _BOOL = lambda v: isinstance(v, bool)                                               # noqa: E731
 
 # commandType -> (required params, optional params). Unknown params are rejected too.
+_OPP = lambda v: isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 4    # noqa: E731
+
+# Commands the MODEL may send: the ones the prompt offers, every parameter required.
+# (The GK never asks the model; tactics code sends GK_DISTRIBUTE etc. directly.)
 PARAMS = {
-    "MOVE_TO": ({"target_x": _num(-60, 60), "target_y": _num(-40, 40)}, {"sprint": _BOOL}),
-    "PASS": ({"target_player_id": _MATE}, {"type": _one_of("GROUND", "AERIAL", "THROUGH")}),
-    "SHOOT": ({"aim_location": _one_of("TL", "TR", "BL", "BR", "CENTER")}, {"power": _num(0, 1)}),
-    "PRESS_BALL": ({}, {"intensity": _num(0, 1)}),
-    "MARK": ({"target_player_id": _MATE}, {"tightness": _one_of("TIGHT", "NORMAL", "LOOSE")}),
-    "INTERCEPT": ({}, {"aggressive": _BOOL}),
-    "FOLLOW_PLAYER": ({"target_player_id": _MATE},
-                      {"target_team": _one_of("HOME", "AWAY"), "distance": _num(0, 30)}),
-    "SLIDE_TACKLE": ({"target_player_id": _MATE}, {"sprint": _BOOL, "distance": _num(0, 30)}),
-    "GK_DISTRIBUTE": ({"target_player_id": _MATE}, {"method": _one_of("THROW", "KICK")}),
-    "CLEAR_OVERRIDE": ({}, {}),
+    "MOVE_TO": ({"target_x": _num(-55, 55), "target_y": _num(-35, 35), "sprint": _BOOL}, {}),
+    "PASS": ({"target_player_id": _MATE, "type": _one_of("GROUND", "AERIAL", "THROUGH")}, {}),
+    "SHOOT": ({"aim_location": _one_of("TL", "TR", "BL", "BR", "CENTER"), "power": _num(0, 1)}, {}),
+    "PRESS_BALL": ({"intensity": _num(0, 1)}, {}),
+    "MARK": ({"target_player_id": _OPP, "tightness": _one_of("TIGHT", "LOOSE")}, {}),
+    "INTERCEPT": ({"aggressive": _BOOL}, {}),
 }
 
 
@@ -148,14 +153,30 @@ def _params_ok(c, pid):
     return True
 
 
-def _validate(cmds, team_id, pid, has_ball):
-    if not cmds:
+def _raw_command(text):
+    """First command object exactly as the model wrote it. The shared parse_commands fills in
+    defaults (e.g. a PASS target) before we could see they were missing, so check the raw one."""
+    for candidate in _iter_array_candidates(text):
+        parsed = _loads(candidate, None)
+        if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+            return copy.deepcopy(parsed[0])
+    parsed = _loads(text, None)
+    if isinstance(parsed, dict) and "commandType" in parsed:
+        return copy.deepcopy(parsed)
+    return None
+
+
+def _validate(raw_cmd, team_id, pid, has_ball):
+    if not isinstance(raw_cmd, dict) or raw_cmd.get("commandType") not in PARAMS:
         return None
+    if raw_cmd.get("playerId", pid) != pid:
+        return None                                      # the model wrote someone else's id
+    c = dict(raw_cmd, playerId=pid, teamId=team_id)
     try:
-        c = Command(**cmds[0]).model_dump(exclude_none=True)
+        c = Command(**c).model_dump(exclude_none=True)
     except ValidationError:
         return None
-    if c["playerId"] != pid or c["teamId"] != team_id or not _params_ok(c, pid):
+    if not _params_ok(c, pid):
         return None
     if c["commandType"] in ON_BALL and not has_ball:
         return None            # would be wasted on the server
@@ -178,10 +199,11 @@ async def decide(game_state, team_id, pid):
     f = tactics.facts(game_state, team_id, pid)
     source, out, raw = "rule", fallback, None
 
-    hard = f and (fallback[0]["commandType"] in ("SHOOT", "GK_DISTRIBUTE"))
+    # Final without the model: the goalkeeper (fully coded), and shots.
+    hard = f and (pid == 0 or fallback[0]["commandType"] == "SHOOT")
     if f and not hard:
         msg = json.dumps({"FACTS": f, "SUGGESTION": fallback[0],
-                          "COACH": [m for m in (game_state.get("teamChat") or [])][-1:]})
+                          "COACH": tactics.coach_messages(game_state.get("teamChat"), team_id)[-1:]})
         agent = None
         try:
             if not _inflight.acquire(blocking=False):
@@ -193,7 +215,7 @@ async def decide(game_state, team_id, pid):
                 _inflight.release()
                 raise
             raw = await asyncio.wait_for(asyncio.wrap_future(fut), TIMEOUT_S)
-            got = _validate(parse_commands(raw, team_id, pid), team_id, pid, f["hasBall"])
+            got = _validate(_raw_command(raw), team_id, pid, f["hasBall"])
             source, out = ("llm", got) if got else ("fallback_invalid", fallback)
         except asyncio.TimeoutError:
             source = "fallback_timeout"
