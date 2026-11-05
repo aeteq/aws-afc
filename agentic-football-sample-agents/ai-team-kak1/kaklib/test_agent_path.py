@@ -320,6 +320,32 @@ finally:
     t.SCALE_X, t.SCALE_Y = old
 
 
+# 5e. coach_config.json loader
+import copy as _copy  # noqa: E402
+import tempfile  # noqa: E402
+saved = {k: _copy.deepcopy(getattr(t, k)) for k in ("SHOOT_RANGE", "OWN_BOX", "PRESSURE_DIST", "COACH_VERSION",
+                                                      "COACH_PROMPT_RULES", "COACH_APPLIED")}
+try:
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump({"version": "c-test", "params": {"SHOOT_RANGE.FWD": 30, "OWN_BOX": 999, "PRESSURE_DIST": "x",
+                                                    "NOT_A_PARAM": 3, "SHOOT_RANGE.NOPE": 1},
+                   "prompt_rules": ["Prefer lofted passes under pressure.", 7]}, fh)
+    t._load_coach_config(fh.name)
+    check("coach: SHOOT_RANGE.FWD overridden", t.SHOOT_RANGE["FWD"] == 30)
+    check("coach: OWN_BOX clamped to +50%", t.OWN_BOX == saved["OWN_BOX"] * 1.5)
+    check("coach: non-numeric and unknown params ignored",
+          t.PRESSURE_DIST == saved["PRESSURE_DIST"] and "NOT_A_PARAM" not in t.COACH_APPLIED and "NOPE" not in t.SHOOT_RANGE)
+    check("coach: version and string rules kept", t.COACH_VERSION == "c-test" and t.COACH_PROMPT_RULES == ["Prefer lofted passes under pressure."])
+    with open(fh.name, "w") as bad:
+        bad.write("{not json")
+    before = dict(t.SHOOT_RANGE)
+    t._load_coach_config(fh.name)
+    check("coach: bad JSON ignored", t.SHOOT_RANGE == before)
+finally:
+    for k, v in saved.items():
+        setattr(t, k, v)
+
+
 # 6. live match length: protect/chase run in the last 20% of a 120 s match
 m = state(holder=3)
 m["score"] = {"home": 1, "away": 0}

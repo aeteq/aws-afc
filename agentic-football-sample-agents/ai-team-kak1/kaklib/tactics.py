@@ -698,3 +698,55 @@ def facts(game_state, team_id, player_id):
         "score": game_state.get("score", {}),
         "gameTime": game_state.get("gameTime", 0),
     }
+
+
+# --- between-match coach overrides ----------------------------------------------------------
+# tools/coach.py may write kaklib/coach_config.json:
+#   {"version": ..., "params": {"NAME" or "NAME.KEY": number, ...}, "prompt_rules": [str, ...]}
+# Only existing numeric module constants (or keys of dict constants) are overridden, each within
+# +-50% of its default. A missing or invalid file = today's behaviour.
+COACH_VERSION = None
+COACH_PROMPT_RULES = []
+COACH_APPLIED = {}
+
+
+def _load_coach_config(path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "coach_config.json")):
+    global COACH_VERSION, COACH_PROMPT_RULES
+    import json
+    import logging
+    log = logging.getLogger("tactics")
+    try:
+        with open(path) as fh:
+            cfg = json.load(fh)
+    except FileNotFoundError:
+        return
+    except Exception as e:  # bad JSON: keep defaults
+        log.warning(f"coach_config ignored: {e}")
+        return
+    g = globals()
+    for name, value in (cfg.get("params") or {}).items():
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        base, _, key = str(name).partition(".")
+        cur = g.get(base)
+        if key:
+            if not isinstance(cur, dict) or not isinstance(cur.get(key), (int, float)):
+                continue
+            default = cur[key]
+        elif isinstance(cur, (int, float)) and not isinstance(cur, bool):
+            default = cur
+        else:
+            continue
+        lo, hi = sorted((default * 0.5, default * 1.5))
+        v = max(lo, min(hi, float(value)))
+        if key:
+            cur[key] = v
+        else:
+            g[base] = v
+        COACH_APPLIED[name] = v
+    rules = cfg.get("prompt_rules") or []
+    COACH_PROMPT_RULES = [str(r)[:200] for r in rules if isinstance(r, str)][:5]
+    COACH_VERSION = cfg.get("version")
+
+
+_load_coach_config()

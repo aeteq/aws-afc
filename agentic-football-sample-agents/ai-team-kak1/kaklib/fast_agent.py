@@ -106,9 +106,11 @@ def _get_model():
 def _new_agent(role, pid):
     from strands import Agent
     # New Agent per call = no history (stateless, small prompt, safe under parallel calls).
+    rules = "".join(f"\n- {r}" for r in tactics.COACH_PROMPT_RULES)
+    notes = ROLE_NOTES.get(role, "") + (f"\nCoach rules:{rules}" if rules else "")
     return Agent(model=_get_model(), callback_handler=None, retry_strategy=None,
                  system_prompt=BASE_PROMPT.format(role=role, pid=pid, half=tactics.PITCH_HALF_X, half_y=round(tactics.PITCH_HALF_Y, 2),
-                                                  role_notes=ROLE_NOTES.get(role, "")))
+                                                  role_notes=notes))
 
 
 def _ask_llm(agent, user_msg):
@@ -213,7 +215,7 @@ def _log_raw_payload(data):
     _last_raw_t = t
     if new_match:
         _mid_logged = False
-        log.info(json.dumps({"raw_payload": data})[:20000])
+        log.info(json.dumps({"raw_payload": data, "coach_version": tactics.COACH_VERSION})[:20000])
     elif not _mid_logged and t >= 20:      # one open-play payload too (kick-off uses other units)
         _mid_logged = True
         log.info(json.dumps({"raw_payload": data})[:20000])
@@ -314,7 +316,8 @@ def create_handler(app, default_pid):
                 "myPlayers": mine, "teamId": data.get("teamId"),
                 "ball_keys": sorted((gs.get("ball") or {}).keys()),
                 "player_keys": sorted(((gs.get("players") or [{}])[0]).keys()),
-                "playMode": gs.get("playMode"), "gameTime": gs.get("gameTime")}}))
+                "playMode": gs.get("playMode"), "gameTime": gs.get("gameTime"),
+                "coach_version": tactics.COACH_VERSION, "coach_params": tactics.COACH_APPLIED}}))
         _log_raw_payload(data)
         pid = mine[0] if len(mine) == 1 else default_pid
         if len(mine) > 1:
