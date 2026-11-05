@@ -245,6 +245,34 @@ class View:
             r += KEEPER_OUT_SHOOT_BONUS
         return min(r, 45.0)                # past this, shots are just giveaways
 
+    # --- the single press/shoot policy: rules and model are both held to it ---
+    def press_allowed(self):
+        """Press only when the opponent has the ball. Never the GK, never the DEF in their half.
+        At most the 2 nearest eligible outfielders (3 when chasing): avoids the 'ball magnet'
+        (practice match 1: 152 model presses out of ~390 outfield commands)."""
+        if self.pid == 0 or self.holder is None or self.holder_mine:
+            return False
+        their_half = (self.ball[0] * self.s) > 0
+
+        def eligible(i):
+            return i != 0 and not (ROLE.get(i) == "DEF" and their_half)
+        if not eligible(self.pid):
+            return False
+        order = sorted((i for i in self.mates if eligible(i)), key=lambda i: _d(_pos(self.mates[i]), self.ball))
+        rank = order.index(self.pid) if self.pid in order else 99
+        return rank < (3 if self.mode == "chase" else 2)
+
+    def shot_allowed(self):
+        return self.i_have_ball and _d(_pos(self.me), self.opp_goal) < self.shoot_range()
+
+    def allows(self, cmd):
+        kind = cmd.get("commandType")
+        if kind == "PRESS_BALL":
+            return self.press_allowed()
+        if kind == "SHOOT":
+            return self.shot_allowed()
+        return True
+
     def most_advanced_mate(self, min_lane=2.0):
         """Furthest-forward outfield teammate with a clear-enough lane, or None."""
         me, opps = _pos(self.me), self.opp_positions()
@@ -405,8 +433,8 @@ def _defend(v):
             return v.c("INTERCEPT", aggressive=True)
         return _shape(v)
 
-    # Opponent has the ball.
-    if chaser == v.pid:
+    # Opponent has the ball. Every press below also needs v.press_allowed() (one policy).
+    if chaser == v.pid and v.press_allowed():
         return v.c("PRESS_BALL", intensity=1.0)
     ball_in_our_half = (v.ball[0] - 0.0) * v.s < 0
     if v.role == "DEF":
@@ -416,7 +444,7 @@ def _defend(v):
         return _shape(v)
     if v.role == "MID":
         # Chasing: press anywhere. Otherwise only in our half.
-        if (ball_in_our_half or v.mode == "chase") and _d(me, v.ball) < 15:
+        if (ball_in_our_half or v.mode == "chase") and _d(me, v.ball) < 15 and v.press_allowed():
             return v.c("PRESS_BALL", intensity=0.8)
         return _shape(v)
     # Forwards: second presser high up the pitch, otherwise wait for the counter.
@@ -425,7 +453,7 @@ def _defend(v):
     if v.style == "counter" and v.mode != "chase":
         return _hold_high(v, depth=72)     # don't press: stay up as the outlet
     radius = 20.0 if v.mode == "chase" else 12.0
-    if not ball_in_our_half and _d(me, v.ball) < radius:
+    if not ball_in_our_half and _d(me, v.ball) < radius and v.press_allowed():
         return v.c("PRESS_BALL", intensity=1.0 if v.mode == "chase" else 0.8)
     return _hold_high(v)
 
@@ -475,19 +503,14 @@ def decide(game_state, team_id, player_id, adaptive=True, force=None):
     return _defend(v)
 
 
+def allowed(game_state, team_id, player_id, cmd):
+    """The press/shoot policy applied to any command (model or rules)."""
+    v = View(game_state, team_id, player_id)
+    return v.me is not None and v.allows(cmd)
+
+
 def may_press(game_state, team_id, player_id):
-    """Who is allowed to PRESS_BALL. Stops the 'ball magnet' (in practice match 1 the model
-    sent PRESS_BALL 152 times out of ~390 outfield commands, DEF 42 times).
-    Allowed: our outfield player nearest the ball; also the second nearest when chasing.
-    The DEF never presses in the opponent's half."""
-    v = View(game_state, team_id, player_id, adaptive=False)
-    if v.me is None or v.pid == 0:
-        return False
-    if v.role == "DEF" and (v.ball[0] * v.s) > 0:
-        return False
-    order = sorted((i for i in v.mates if i != 0), key=lambda i: _d(_pos(v.mates[i]), v.ball))
-    rank = order.index(v.pid) if v.pid in order else 99
-    return rank == 0 or (rank == 1 and v.mode == "chase")
+    return allowed(game_state, team_id, player_id, {"commandType": "PRESS_BALL"})
 
 
 def facts(game_state, team_id, player_id):

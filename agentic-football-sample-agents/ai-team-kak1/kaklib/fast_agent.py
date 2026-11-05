@@ -218,8 +218,8 @@ async def decide(game_state, team_id, pid):
             got = _validate(_raw_command(raw), team_id, pid, f["hasBall"])
             if not got:
                 source = "fallback_invalid"
-            elif got[0]["commandType"] == "PRESS_BALL" and not tactics.may_press(game_state, team_id, pid):
-                source = "override_press"           # code decides who presses
+            elif not tactics.allowed(game_state, team_id, pid, got[0]):
+                source = "override_" + got[0]["commandType"].lower()   # e.g. override_press_ball
             else:
                 source, out = "llm", got
         except asyncio.TimeoutError:
