@@ -47,6 +47,11 @@ API = "https://l3fmtx4zp0.execute-api.us-east-1.amazonaws.com/prod"
 AGENTS = ("gk", "def", "mid", "fwd1", "fwd2")
 OUT = os.path.join(HERE, "..", "matches")
 POLL_S, MATCH_TIMEOUT_S, LOG_LAG_S = 15, 15 * 60, 90
+# Status values seen: "starting" (30 s auto-start delay), "in_progress". A match is over only
+# when its status is one of these; anything else counts as still running.
+DONE = {"completed", "complete", "finished", "done", "ended", "cancelled", "canceled",
+        "failed", "error", "rejected", "aborted", "timeout", "timed_out"}
+MATCH_WINDOW_S = 6 * 60      # --collect: logs from start-30 s to start+6 min
 
 
 class Stop(Exception):
@@ -84,7 +89,7 @@ def practice_matches(token):
 def wait_idle(token):
     """Wait while one of our practice matches is in progress."""
     t0 = time.time()
-    while any(m.get("status") == "in_progress" for m in practice_matches(token)):
+    while any(m.get("status") not in DONE for m in practice_matches(token)):
         if time.time() - t0 > MATCH_TIMEOUT_S:
             raise Stop("a practice match has been in progress for 15 min; not starting another")
         time.sleep(POLL_S)
@@ -100,7 +105,8 @@ def play(token, team_id, opponent):
         items = practice_matches(token)
         me = next((m for m in items if (m.get("match_id") or m.get("id")) == mid), None)
         status = (me or {}).get("status")
-        if status and status != "in_progress":
+        if status in DONE:
+            print(f"match {mid}: {status}", flush=True)
             return mid, me, started, time.time()
         if time.time() - started > MATCH_TIMEOUT_S:
             raise Stop(f"match {mid} not finished after 15 min")
@@ -157,6 +163,8 @@ def notify(addrs, text):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--check", action="store_true", help="log in and list practice matches, play nothing")
+    ap.add_argument("--collect", metavar="MATCH_DIR",
+                    help="re-pull the logs of an already played match (its match.json) and analyse it")
     ap.add_argument("--matches", type=int, default=1, help="matches to play this run (max 6)")
     ap.add_argument("--opponent", action="append", choices=("balanced", "aggressive", "defensive"),
                     help="repeat to rotate (default balanced)")
@@ -167,6 +175,17 @@ def main():
     ap.add_argument("--notify", action="append", default=[], help="hc address to message after each match")
     args = ap.parse_args()
 
+    if args.collect:
+        meta = json.load(open(os.path.join(args.collect, "match.json")))
+        t0 = meta["started"]
+        pull_logs(args.profile, args.region, t0 - 30, t0 + MATCH_WINDOW_S, args.collect)
+        r = analyse(args.collect, meta.get("label", ""), meta["match_id"], meta.get("opponent"))
+        line = (f"AUTOPLAY collect [{meta.get('label', '')}] vs {meta.get('opponent')}: "
+                + (f"kak1 {r['us']}-{r['them']} ({r['side']}), shots {r['shots']}, on-ball {r['on_ball']}"
+                   if r else "still no full match in the logs") + f". {os.path.abspath(args.collect)}")
+        print(line)
+        notify(args.notify, line)
+        return
     code = os.getenv("AFC_TEAM_CODE")
     if not code:
         raise SystemExit("set AFC_TEAM_CODE (the team code from the organiser; never commit it)")
