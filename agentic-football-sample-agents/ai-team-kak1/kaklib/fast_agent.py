@@ -54,32 +54,70 @@ class Command(BaseModel):
     reason: Optional[str] = None   # ignored by the server, handy in logs
 
 
-BASE_PROMPT = """You control ONE player ({role}, id {pid}) in a 5v5 football match.
-Each turn you get FACTS (pre-computed) and SUGGESTION (a safe default command).
-Return the SUGGESTION unless you see a clearly better option. Rules:
-- PASS/SHOOT only if hasBall is true. Code already shoots when in range; you don't need to.
-- If iAmNearestToBall and ballOwner is opponent: PRESS_BALL.
-- Use the whole command set: MOVE_TO, PASS, SHOOT, PRESS_BALL, MARK, INTERCEPT.
-- FACTS.mode: chase = we need a goal, take risks; protect = keep the lead, play safe.
-- FACTS.style: counter = they push up, hit our forwards fast; patient = they sit deep, keep the ball.
+# Team rules and role notes: our coach's instructions, kept close to his wording.
+# tactics.py implements the same rules in code; that code writes the SUGGESTION.
+BASE_PROMPT = """You are one player in a 5-a-side AI football team: the {role}, player id {pid}.
+The game is real time: a fast, decent decision beats a slow, perfect one.
+Decide in one step. Never deliberate.
+
+Team priorities, in order:
+1. Never leave our goal unprotected.
+2. Keep possession when under pressure; a safe pass beats a risky dribble.
+3. When a clear shot exists (close, centred, no defender blocking), take it.
+
+Stay in your role zone unless your role says otherwise. Two players chasing the
+same ball is our most common way to concede.
+
+Your role ({role}):
 {role_notes}
+
+Each turn you get FACTS (pre-computed) and SUGGESTION: the command our coach's rules chose
+for this exact situation. Return the SUGGESTION unless FACTS show a clearly better option
+that still follows every rule above.
+- PASS/SHOOT only if FACTS.hasBall is true. FACTS.clearShot says if a clear shot exists.
+- FACTS.zone is your zone in pitch coordinates (null = no hard limit). Never MOVE_TO outside it.
+- FACTS.mode: chase = we need a goal, take more risks; protect = keep the lead, play safe.
 Commands (ALL parameters required; numbers are numbers, not words):
 MOVE_TO{{target_x:number,target_y:number,sprint:true|false}}
-PASS{{target_player_id:teammate id 1-4,type:"GROUND"|"AERIAL"|"THROUGH"}}
+PASS{{target_player_id:teammate id 0-4 (0 = our keeper),type:"GROUND"|"AERIAL"|"THROUGH"}}
 SHOOT{{aim_location:"TL"|"TR"|"BL"|"BR",power:0.0-1.0}}
-PRESS_BALL{{intensity:0.0-1.0}}
+PRESS_BALL{{intensity:0.0-1.0}}  (this is how you tackle)
 MARK{{target_player_id:opponent id 1-4,tightness:"TIGHT"|"LOOSE"}}
 INTERCEPT{{aggressive:true|false}}
-Pitch x -55..55, y -35..35. FACTS has positions: me, ball, mates and opps as id: [x, y].
-You attack toward FACTS.attackDirection.
+Pitch x -55..55, y -35..35, halfway line x=0. FACTS has positions: me, ball, mates and opps
+as id: [x, y]. You attack toward FACTS.attackDirection.
 Reply with ONLY a JSON array of one command, e.g.
 [{{"commandType":"MOVE_TO","playerId":{pid},"parameters":{{"target_x":20,"target_y":5,"sprint":true}}}}]"""
 
+# Formation 1-2-1: GK 0, DEF 1, MID1 2 (left), MID2 3 (right), FWD 4 (single forward).
+_MID_NOTES = """You are one of two playmakers; you take the {side} channel, the other midfielder
+(player {other}) takes the {other_side}. Zone: the middle third, free to drift wide.
+- With the ball: look for the striker (player 4) first, winger second (player {other}, when he is
+  ahead of you). Pass into space ahead of them (PASS type THROUGH), not to their feet.
+- If no forward pass is safe, recycle to the defender (player 1) and reposition.
+- Without the ball: press the opponent carrying it in the middle third, but only if you are
+  nearer the ball than player {other}; otherwise cover. Fall back to cover the defender if our
+  half is outnumbered."""
+
 ROLE_NOTES = {
-    "GK": "- Stay near your goal. With the ball, GK_DISTRIBUTE to the most open teammate.",
-    "DEF": "- Protect the goal. MARK the most dangerous attacker. With the ball, pass forward fast.",
-    "MID": "- Link play. Keep your side channel (FACTS.side: +1 left, -1 right, 0 centre). Win loose balls (INTERCEPT). Pass to the forward in space.",
-    "FWD": "- Score. Stay high (central if FACTS.side is 0). Run in behind when a teammate has the ball.",
+    "GK": """Zone: our penalty area. HARD RULE: never leave the area.
+- Position yourself on the line between the ball and the centre of our goal.
+- With the ball: pass immediately (GK_DISTRIBUTE) to the nearest unmarked teammate, preferring
+  the defender (player 1). Never dribble.
+- If an opponent is clear through on goal, step toward them to narrow the angle, then hold.""",
+    "DEF": """Zone: our half. HARD RULE: never cross the halfway line.
+- Without the ball: stay goal-side of the most dangerous opponent (closest to our goal).
+- Tackle (PRESS_BALL) only when the opponent is within reach AND you are between them and our
+  goal; otherwise block the lane.
+- With the ball: pass forward to a playmaker (midfielder 2 or 3, whichever is unmarked). If they
+  are marked, pass back to the keeper (player 0). Never hold the ball under pressure.""",
+    "MID1": _MID_NOTES.format(side="left", other=3, other_side="right"),
+    "MID2": _MID_NOTES.format(side="right", other=2, other_side="left"),
+    "FWD": """You are our only forward. Zone: the opponent half. HARD RULE: never drop behind the
+halfway line.
+- Without the ball: position between their defenders, ready for a pass in behind.
+- With the ball: if a shot is available, SHOOT. Aim away from the keeper. Do not overthink it.
+- If blocked, lay off to a midfielder (player 2 or 3) and move into space for the return.""",
 }
 
 _model = None
@@ -147,8 +185,8 @@ def _params_ok(c, pid):
         return False
     if any(k not in req and (k not in opt or not opt[k](v)) for k, v in p.items()):
         return False
-    if c["commandType"] in ("PASS", "GK_DISTRIBUTE") and p["target_player_id"] in (pid, 0):
-        return False           # can't pass to yourself or back to the keeper
+    if c["commandType"] in ("PASS", "GK_DISTRIBUTE") and p["target_player_id"] == pid:
+        return False           # can't pass to yourself (back to the keeper is allowed: DEF rule)
     return True
 
 
@@ -171,6 +209,12 @@ def _validate(raw_cmd, team_id, pid, has_ball):
     if raw_cmd.get("playerId", pid) != pid:
         return None                                      # the model wrote someone else's id
     c = dict(raw_cmd, playerId=pid, teamId=team_id)
+    params = c.get("parameters")
+    if isinstance(params, dict) and "duration" in params:
+        # Models sometimes put duration inside parameters; move it up instead of rejecting.
+        params = dict(params)
+        c.setdefault("duration", params.pop("duration"))
+        c["parameters"] = params
     try:
         c = Command(**c).model_dump(exclude_none=True)
     except ValidationError:
@@ -217,6 +261,8 @@ async def decide(game_state, team_id, pid):
             got = _validate(_raw_command(raw), team_id, pid, f["hasBall"])
             if not got:
                 source = "fallback_invalid"
+            elif not tactics.respects_zone(game_state, team_id, pid, got[0]):
+                source = "fallback_zone"            # would break the role's hard zone rule
             elif not tactics.allowed(game_state, team_id, pid, got[0]):
                 source = "override_" + got[0]["commandType"].lower()   # e.g. override_press_ball
             else:

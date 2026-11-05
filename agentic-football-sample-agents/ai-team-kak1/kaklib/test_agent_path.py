@@ -74,17 +74,92 @@ check("wrong playerId rejected", v({"playerId": 4, "teamId": 0, "commandType": "
                                     "parameters": {"aggressive": True}}) is None)
 
 
-# 2b. tactics: protect mode never shoots from long range, even with their keeper off his line
-pr = state(holder=3)
-pr["gameTime"], pr["score"] = 280, {"home": 1, "away": 0}
-fwd = pr["players"][3]["position"]; fwd["x"], fwd["y"] = 55 - 31, 0       # 31 from goal
-for p in pr["players"]:
-    if p["teamCode"] == "away" and p["agentId"] == "agentId_0":
-        p["position"]["x"] = 40                                        # their GK 15 off his line
-pr["ball"]["position"] = {"x": fwd["x"] + 0.5, "y": 0, "z": 0}
-check("protect + keeper out: no shot from 31", t.decide(pr, 0, 3)[0]["commandType"] != "SHOOT")
-pr["score"] = {"home": 0, "away": 0}
-check("normal + keeper out: shoots from 31", t.decide(pr, 0, 3)[0]["commandType"] == "SHOOT")
+check("duration inside parameters is moved up, not rejected",
+      v({**base, "commandType": "INTERCEPT", "parameters": {"aggressive": True, "duration": 0}}))
+check("DEF may pass back to the keeper", v({"playerId": 1, "teamId": 0, "commandType": "PASS",
+                                            "parameters": {"target_player_id": 0, "type": "GROUND"}},
+                                           True, pid=1))
+
+
+# 2b. coach rules in tactics (1-2-1: GK 0, DEF 1, MID1 2, FWD 3, MID2 4; HOME attacks +x)
+def scene(home, away, ball, holder=None, score=(0, 0), t=60):
+    """home/away: {id: (x, y)}. holder: id of the player on the ball (None = loose)."""
+    players = []
+    for code, pos in (("home", home), ("away", away)):
+        for i, (x, y) in pos.items():
+            players.append({"agentId": f"agentId_{i}", "teamCode": code, "position": {"x": x, "y": y},
+                            "velocity": {"x": 0, "y": 0}, "stamina": 0.9})
+    b = {"position": {"x": ball[0], "y": ball[1], "z": 0}, "velocity": {"x": 0, "y": 0}, "isFree": holder is None}
+    if holder is not None:
+        b["possessionAgentId"] = f"agentId_{holder}"
+    return {"tick": 5, "gameTime": t, "score": {"home": score[0], "away": score[1]}, "ball": b,
+            "players": players, "teamChat": []}
+
+
+HOME = {0: (-52, 0), 1: (-30, 0), 2: (-5, 12), 4: (25, 0), 3: (-5, -12)}
+AWAY = {0: (52, 0), 1: (30, 5), 2: (10, 0), 4: (-10, 8), 3: (35, -5)}
+go = lambda gs, pid: t.decide(gs, 0, pid)[0]                       # noqa: E731
+tgt = lambda c: (c["parameters"]["target_x"], c["parameters"]["target_y"])  # noqa: E731
+
+# GK: never leaves the area, stands between ball and goal, distributes to the defender.
+far_ball = scene(HOME, AWAY, (40, 20), holder=3)
+c = go(far_ball, 0)
+check("GK stays in the area with the ball far away", c["commandType"] == "MOVE_TO" and tgt(c)[0] <= -55 + 16.5)
+through = scene({**HOME, 1: (-20, 20)}, {**AWAY, 4: (-35, 2)}, (-34.5, 2), holder=4)
+c = go(through, 0)
+check("GK steps out to a runner clear through, still in the area",
+      c["commandType"] == "MOVE_TO" and -55 + 2 < tgt(c)[0] <= -55 + 16.5)
+gk_ball = scene(HOME, AWAY, (-51.5, 0), holder=0)
+c = go(gk_ball, 0)
+check("GK passes to the unmarked defender", c["commandType"] == "GK_DISTRIBUTE" and c["parameters"]["target_player_id"] == 1)
+marked_def = scene(HOME, {**AWAY, 4: (-29, 1)}, (-51.5, 0), holder=0)
+c = go(marked_def, 0)
+check("GK skips a marked defender for the nearest unmarked mate",
+      c["commandType"] == "GK_DISTRIBUTE" and c["parameters"]["target_player_id"] in (2, 3))
+
+# DEF: never crosses halfway, passes to a free midfielder, else back to the keeper.
+attack = scene(HOME, {**AWAY, 4: (40, 0), 1: (45, 5)}, (30, 0), holder=4)
+c = go(attack, 1)
+check("DEF holds his half when our forward attacks", c["commandType"] == "MOVE_TO" and tgt(c)[0] < 0)
+deep = scene(HOME, {k: (x if k == 0 else 40, y) for k, (x, y) in AWAY.items()}, (45, 0), holder=1)
+for pid in (1,):
+    c = go(deep, pid)
+    check("DEF stays in our half with every opponent in theirs",
+          c["commandType"] != "MOVE_TO" or tgt(c)[0] < 0)
+def_ball = scene(HOME, AWAY, (-29.5, 0), holder=1)
+c = go(def_ball, 1)
+check("DEF passes to a free midfielder", c["commandType"] == "PASS" and c["parameters"]["target_player_id"] in (2, 3))
+mids_marked = scene(HOME, {**AWAY, 2: (-5, 10), 4: (-5, -10)}, (-29.5, 0), holder=1)
+c = go(mids_marked, 1)
+check("DEF passes back to the keeper when both midfielders are marked",
+      c["commandType"] == "PASS" and c["parameters"]["target_player_id"] == 0)
+
+# MID: striker first, through ball; only one midfielder presses.
+mid_ball = scene(HOME, {**AWAY, 2: (20, 20)}, (-4.5, 12), holder=2)
+c = go(mid_ball, 2)
+check("MID plays the striker in behind first", c["commandType"] == "PASS"
+      and c["parameters"]["target_player_id"] == 4 and c["parameters"]["type"] == "THROUGH")
+press = scene(HOME, {**AWAY, 2: (-3, 10)}, (-2.5, 10), holder=2)
+cmds = [go(press, 2)["commandType"], go(press, 3)["commandType"]]
+check("only the nearer midfielder presses", cmds.count("PRESS_BALL") == 1 and cmds[0] == "PRESS_BALL")
+
+# FWD: never behind halfway, shoots clear shots only.
+back = scene(HOME, {**AWAY, 2: (-40, 0), 4: (-45, 5)}, (-42, 0), holder=2)
+c = go(back, 4)
+check("FWD never drops behind halfway", c["commandType"] != "MOVE_TO" or tgt(c)[0] > 0)
+clear = scene({**HOME, 4: (38, 2)}, {**AWAY, 1: (30, 15), 3: (30, -15)}, (38.5, 2), holder=4)
+check("FWD shoots a clear shot from 17", go(clear, 4)["commandType"] == "SHOOT")
+blocked = scene({**HOME, 4: (38, 2)}, {**AWAY, 1: (45, 1.5)}, (38.5, 2), holder=4)
+check("FWD does not shoot through a defender", go(blocked, 4)["commandType"] != "SHOOT")
+long = scene({**HOME, 4: (20, 0)}, {**AWAY, 1: (30, 15), 3: (30, -15)}, (20.5, 0), holder=4)
+check("no long shots (35 from goal)", go(long, 4)["commandType"] != "SHOOT")
+
+# Hard zones also apply to the model's answers.
+mv = lambda x: {"commandType": "MOVE_TO", "parameters": {"target_x": x, "target_y": 0, "sprint": False}}  # noqa: E731
+check("model: DEF MOVE_TO past halfway refused", not t.respects_zone(attack, 0, 1, mv(10)))
+check("model: FWD MOVE_TO into our half refused", not t.respects_zone(attack, 0, 4, mv(-10)))
+check("model: GK MOVE_TO out of the area refused", not t.respects_zone(attack, 0, 0, mv(-30)))
+check("model: MID may go anywhere", t.respects_zone(attack, 0, 2, mv(-40)))
 
 # 2c. facts carry positions
 f2 = t.facts(state(holder=2), 0, 2)

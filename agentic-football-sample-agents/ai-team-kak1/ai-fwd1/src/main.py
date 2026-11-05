@@ -1,4 +1,4 @@
-"""kak1 FWD1 agent (player 3). Logic: lib/fast_agent.py (model layer) + lib/tactics.py (rules).
+"""kak1 MID2 agent (player 3: right midfielder in 1-2-1). Logic: lib/fast_agent.py (model layer) + lib/tactics.py (rules).
 Tune per player here: MODEL_ID, LLM_TIMEOUT_MS. Deployed by ../deploy-all.sh."""
 
 import os
@@ -17,7 +17,7 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp  # noqa: E402
 from fast_agent import create_handler  # noqa: E402
 
 MY_PLAYER_ID = 3
-POSITION_LABEL = "FWD1"
+POSITION_LABEL = "MID2"
 
 app = BedrockAgentCoreApp()
 create_handler(app, MY_PLAYER_ID)
