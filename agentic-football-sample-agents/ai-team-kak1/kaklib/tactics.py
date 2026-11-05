@@ -31,6 +31,29 @@ SCALE_Y = HALF_Y / PITCH_HALF_Y
 BALL_LATERAL = os.getenv("BALL_LATERAL", "z")
 
 
+_score_seen = {"t": None, "score": None, "kicks": None}   # per process: who kicks off next
+
+
+def _kickoff_team(gs):
+    """Team id (0 home, 1 away) that kicks off now: the one that conceded the last goal.
+    None at the opening kick-off (coin toss) or when we haven't seen a goal this match."""
+    t = gs.get("gameTime") or 0
+    sc = gs.get("score") or {}
+    score = (sc.get("home", 0), sc.get("away", 0))
+    seen = _score_seen
+    if seen["t"] is not None and t + 5 < seen["t"]:           # a new match started
+        seen["score"], seen["kicks"] = None, None
+    if seen["score"] is not None and score != seen["score"]:
+        if score[0] > seen["score"][0]:
+            seen["kicks"] = 1                                  # home scored -> away kicks off
+        elif score[1] > seen["score"][1]:
+            seen["kicks"] = 0
+    elif seen["score"] is None and score != (0, 0):
+        seen["kicks"] = None                                    # joined mid-match (cold start): unknown
+    seen["t"], seen["score"] = t, score
+    return seen["kicks"]
+
+
 def _ball_flat(d):
     """Ball position/velocity as {x, y} with y = sideways (z when live and present)."""
     if not isinstance(d, dict):
@@ -221,6 +244,8 @@ class View:
         self.ball = _pos(ball)
         v = ball.get("velocity", {})
         self.ball_v = (v.get("x", 0.0), v.get("y", 0.0))
+        self.kickoff = gs.get("playMode") == "KICK_OFF"
+        self.kickoff_team = _kickoff_team(gs)
         self.holder = self._holder(ball, players)
         self.holder_mine = self.holder is not None and _is_my_team(self.holder, team_id)
         self.i_have_ball = self.holder_mine and _player_idx(self.holder) == pid
@@ -307,6 +332,17 @@ class View:
                 cands = [p for p in cands if p.get("teamId") == ball["possessionTeamId"]]
         if not cands:
             return None
+        teams = {str(p.get("teamCode", p.get("teamId"))).lower() for p in cands}
+        if self.kickoff and len(teams) > 1:
+            # Kick-off: the id is on both teams and positions can't tell us who has it (practice 3
+            # match 2: at THEIR kick-off we read the ball as ours, the model dribbled, they scored).
+            # The team that conceded last kicks off; at the opening 0-0 nobody knows -> loose.
+            if self.kickoff_team is None:
+                return None
+            mine = [p for p in cands if _is_my_team(p, self.team_id)]
+            theirs = [p for p in cands if not _is_my_team(p, self.team_id)]
+            pick = mine if self.kickoff_team == self.team_id else theirs
+            return pick[0] if pick else None
         return min(cands, key=lambda p: _d(_pos(p), self.ball))
 
     # --- small helpers ---

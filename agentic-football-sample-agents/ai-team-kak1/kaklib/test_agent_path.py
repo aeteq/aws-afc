@@ -418,6 +418,32 @@ finally:
     t.SCALE_X, t.SCALE_Y = _old
 
 
+# 5g. kick-off possession: the team that conceded last kicks off
+def ko(score, t_, team=0):
+    g = state(holder=4)
+    for p in g["players"]:
+        if p["agentId"] == "agentId_4":
+            p["position"] = {"x": -8 if p["teamCode"] == "home" else 8, "y": 0}
+    g["ball"].update(position={"x": -8, "y": 0, "z": 0}, isFree=False, possessionAgentId="agentId_4")
+    g["playMode"], g["gameTime"], g["score"] = "KICK_OFF", t_, score
+    return g
+t._score_seen.update(t=None, score=None, kicks=None)
+check("opening kick-off 0-0: ball treated as loose", t.View(ko({"home": 0, "away": 0}, 0), 0, 4).holder is None)
+t.View(ko({"home": 0, "away": 0}, 40), 0, 4)                       # open play seen at 0-0
+check("after OUR goal (home): their kick-off, ball is theirs",
+      not t.View(ko({"home": 1, "away": 0}, 41), 0, 4).holder_mine)
+check("after THEIR goal: our kick-off, ball is ours",
+      t.View(ko({"home": 1, "away": 1}, 60), 0, 4).i_have_ball)
+check("same from the away side: after their (home) goal we kick off",
+      t.View(ko({"home": 2, "away": 1}, 80), 1, 4).holder_mine)
+t._score_seen.update(t=None, score=None, kicks=None)
+check("cold start mid-match (score not 0-0, no history): loose",
+      t.View(ko({"home": 2, "away": 1}, 81), 0, 4).holder is None)
+g_open = ko({"home": 0, "away": 0}, 50); g_open["playMode"] = "OPEN_PLAY"
+check("open play keeps the nearest-candidate rule", t.View(g_open, 0, 4).i_have_ball)
+t._score_seen.update(t=None, score=None, kicks=None)
+
+
 # 6. live match length: protect/chase run in the last 20% of a 120 s match
 m = state(holder=3)
 m["score"] = {"home": 1, "away": 0}
