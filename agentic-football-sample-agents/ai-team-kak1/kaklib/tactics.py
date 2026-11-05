@@ -638,6 +638,64 @@ def _hold_high(v, depth=60):
 
 # --- entry -------------------------------------------------------------------------------
 
+# --- options for the model (USE_MODEL=choice) ---------------------------------------------
+
+def candidates(game_state, team_id, player_id):
+    """2-4 safe options for an outfield player WITH the ball, when no hard rule decides
+    (not in our box, no shot in range). Each: {"label", "cmd", "info"}; info is in LIVE units.
+    The first option is always the rule's own choice. Empty list = don't ask the model."""
+    v = View(game_state, team_id, player_id)
+    if v.me is None or v.pid == 0 or not v.i_have_ball:
+        return []
+    me = _pos(v.me)
+    if _d(me, v.my_goal) < OWN_BOX or _d(me, v.opp_goal) < v.shoot_range():
+        return []
+    opps = v.opp_positions()
+
+    def free(pt):
+        return min((_d(pt, o) for o in opps), default=20.0)
+
+    def live(d):                      # documented distance -> live units (x scale; y is close)
+        return round(d / SCALE_X, 2)
+
+    out, seen = [], set()
+
+    def add(label, cmd):
+        c = cmd[0]
+        p = c["parameters"]
+        key = (c["commandType"], p.get("target_player_id"), p.get("type"),
+               round(p.get("target_x", 0), 0), round(p.get("target_y", 0), 0))
+        if key in seen:
+            return
+        seen.add(key)
+        p = c["parameters"]
+        info = {}
+        if c["commandType"] == "PASS":
+            tp = _pos(v.mates[p["target_player_id"]])
+            info = {"to": ROLE.get(p["target_player_id"]) + str(p["target_player_id"]),
+                    "dist": live(_d(me, tp)), "lane": live(_lane_clear(me, tp, opps)),
+                    "receiverFree": live(free(tp)), "gain": live((tp[0] - me[0]) * v.s)}
+        elif c["commandType"] == "MOVE_TO":
+            info = {"gain": round(((p["target_x"] - _real_x(me[0])) * v.s), 2), "nearestOpp": live(free(me))}
+        out.append({"label": label, "cmd": cmd, "info": info})
+
+    add("rule", _on_ball(v))
+    bp = _best_pass(v)
+    if bp:
+        add("best pass", v.c("PASS", target_player_id=bp[0], type=_pass_type(v, bp)))
+    mates = [i for i in v.mates if i not in (0, v.pid)]
+    if mates:
+        safe = max(mates, key=lambda i: _lane_clear(me, _pos(v.mates[i]), opps) + free(_pos(v.mates[i])))
+        add("safe pass", v.c("PASS", target_player_id=safe, type="AERIAL"))
+        fwd = [i for i in mates if ROLE.get(i) == "FWD"]
+        if fwd and _lane_clear(me, _pos(v.mates[fwd[0]]), opps) > 3.0:
+            add("through ball", v.c("PASS", target_player_id=fwd[0], type="THROUGH"))
+    near_opp = min(opps, key=lambda o: _d(o, me), default=(0, 0))
+    ty = _clamp(me[1] + (3.0 if near_opp[1] < me[1] else -3.0), -12, 12)
+    add("dribble", v.c("MOVE_TO", target_x=round(me[0] + v.s * 12.0, 1), target_y=round(ty, 1), sprint=v.sprint()))
+    return out[:4]
+
+
 def decide(game_state, team_id, player_id, adaptive=True, force=None):
     """adaptive=False: the plain plan (no opponent read). force: fix a style (sim A/B tests)."""
     v = View(game_state, team_id, player_id, adaptive=adaptive, force=force)

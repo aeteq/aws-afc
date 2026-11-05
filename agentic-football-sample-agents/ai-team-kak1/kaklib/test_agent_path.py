@@ -240,6 +240,56 @@ check("USE_MODEL off: rules decide, model not asked", not asked and logs[-1]["sr
 fa.USE_MODEL = True
 
 
+# 3d. choice mode: the model picks among code-built options
+LIVE_HOME = {0: (-50, 2), 1: (-35, 3), 2: (-8, 12), 3: (-16, -14), 4: (20, -2)}
+LIVE_AWAY = {0: (50, 0), 1: (28, 2), 2: (0, 8), 3: (8, -12), 4: (-24, 4)}
+
+
+def onball(pid=2):
+    pl = [{"agentId": f"agentId_{i}", "teamCode": c, "velocity": {"x": 0, "y": 0}, "stamina": 70, "position": {"x": x, "y": y}}
+          for c, b in (("home", LIVE_HOME), ("away", LIVE_AWAY)) for i, (x, y) in b.items()]
+    hx, hy = LIVE_HOME[pid]
+    return {"tick": 9, "gameTime": 50, "score": {"home": 0, "away": 0}, "players": pl, "teamChat": [],
+            "ball": {"position": {"x": hx + 0.3, "y": hy, "z": 0}, "velocity": {"x": 0, "y": 0}, "isFree": False,
+                     "possessionAgentId": f"agentId_{pid}"}}
+
+
+class LetterAgent:
+    def __init__(self, reply):
+        self.reply = reply
+
+    def __call__(self, msg):
+        asked.append(msg)
+        return self.reply
+
+    def cancel(self):
+        pass
+
+
+opts = t.candidates(onball(2), 0, 2)
+check(f"MID on the ball gets 2-4 options ({len(opts)})", 2 <= len(opts) <= 4 and opts[0]["label"] == "rule")
+check("no options without the ball", t.candidates(onball(2), 0, 3) == [])
+check("no options for the GK", t.candidates(onball(0), 0, 0) == [])
+fa.CHOICE, fa.USE_MODEL = True, False
+try:
+    asked.clear()
+    fa._new_choice_agent = lambda role, pid: LetterAgent("B")
+    out = fa.decide_sync(onball(2), 0, 2)
+    shown = logs[-1]["options"]
+    picked = next(o for o in opts if o["label"] == shown[1])
+    check("choice B is played (the option shown second)", logs[-1]["src"] == "llm_choice" and logs[-1]["choice"] == shown[1]
+          and out == picked["cmd"])
+    check("choice message lists the options", asked and "A)" in asked[-1] and "B)" in asked[-1])
+    fa._new_choice_agent = lambda role, pid: LetterAgent("I think Z")
+    out = fa.decide_sync(onball(2), 0, 2)
+    check("invalid letter falls back to the rule", logs[-1]["src"] == "fallback_invalid" and out[0] == t.decide(onball(2), 0, 2)[0])
+    asked.clear()
+    fa.decide_sync(onball(2), 0, 3)
+    check("player without the ball: model not asked", not asked and logs[-1]["src"] == "rule")
+finally:
+    fa.CHOICE = False
+
+
 # 4. player selection from myPlayers
 class FakeApp:
     class logger:

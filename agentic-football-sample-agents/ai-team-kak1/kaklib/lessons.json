@@ -1,0 +1,12 @@
+{
+ "version": "live-3matches-2026-11-05",
+ "source": "live.jsonl",
+ "lines": [
+  "GROUND passes: lost the ball within 2 turns 21 of 27 times, led to a shot 1 times, was followed by a goal against 7 times.",
+  "Dribbles: lost the ball within 2 turns 9 of 12 times, led to a shot 1 times.",
+  "THROUGH passes: lost the ball within 2 turns 3 of 11 times, led to a shot 4 times, was followed by a goal against 4 times.",
+  "Keeper kicks: lost the ball within 2 turns 3 of 8 times.",
+  "Shots: scored 0 of 7.",
+  "AERIAL passes: lost the ball within 2 turns 0 of 5 times, led to a shot 1 times, was followed by a goal against 1 times."
+ ]
+}

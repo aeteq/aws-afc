@@ -15,6 +15,7 @@ import copy
 import json
 import logging
 import os
+import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -38,7 +39,13 @@ MAX_INFLIGHT = int(os.getenv("MAX_INFLIGHT", "2"))   # model calls still running
 # Model off by default: live, it overrode our shape (ball-magnet presses), ~10% of replies were
 # invalid, and each call adds ~0.4 s model + ~0.6 s platform time on a 2 s tick. Turn it back on
 # (USE_MODEL=1) only if a live A/B shows it helps.
-USE_MODEL = os.getenv("USE_MODEL", "0") == "1"
+#   USE_MODEL=0       rules only (default)
+#   USE_MODEL=1       free-form model reply checked against the rules (old mode)
+#   USE_MODEL=choice  on the ball, the model picks one of 2-4 options built by tactics.candidates()
+MODEL_MODE = os.getenv("USE_MODEL", "0")
+USE_MODEL = MODEL_MODE == "1"
+CHOICE = MODEL_MODE == "choice"
+CHOICE_MAX_TOKENS = 4
 
 # Own pool, not asyncio's default: asyncio.run() would otherwise wait for late calls on exit.
 _POOL = ThreadPoolExecutor(max_workers=MAX_INFLIGHT + 1, thread_name_prefix="llm")
@@ -101,6 +108,76 @@ def _get_model():
                 read_timeout=2, connect_timeout=1, retries={"max_attempts": 0}),
         )
     return _model
+
+
+# What worked in our own matches, written by make_lessons.py from tools/mine_examples.py output.
+def _load_lessons(path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "lessons.json")):
+    try:
+        with open(path) as fh:
+            d = json.load(fh)
+        return [str(x)[:200] for x in d.get("lines", [])][:8], d.get("version")
+    except Exception:
+        return [], None
+
+
+LESSONS, LESSONS_VERSION = _load_lessons()
+
+CHOICE_PROMPT = """You are the {role} (player {pid}) in a 5-a-side AI football match, and you have the ball.
+Pick the best of the options you are given. Reply with ONLY the option letter, nothing else.
+Distances are in pitch units (the pitch is about {length} long). "lane" = how far the nearest
+opponent is from the pass line; "receiverFree" = how far the nearest opponent is from the receiver.
+Bigger lane and receiverFree = safer; bigger gain = more progress toward their goal.
+{lessons}{rules}"""
+
+_choice_model = None
+
+
+def _get_choice_model():
+    global _choice_model
+    if _choice_model is None:
+        import botocore.config
+        from strands.models import BedrockModel
+        _choice_model = BedrockModel(
+            model_id=MODEL_ID, temperature=TEMPERATURE, max_tokens=CHOICE_MAX_TOKENS,
+            region_name=os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1")),
+            boto_client_config=botocore.config.Config(
+                read_timeout=2, connect_timeout=1, retries={"max_attempts": 0}),
+        )
+    return _choice_model
+
+
+def _new_choice_agent(role, pid):
+    from strands import Agent
+    lessons = ("What has worked in our matches:\n" + "".join(f"- {x}\n" for x in LESSONS)) if LESSONS else ""
+    rules = ("Coach rules:\n" + "".join(f"- {r}\n" for r in tactics.COACH_PROMPT_RULES)) if tactics.COACH_PROMPT_RULES else ""
+    return Agent(model=_get_choice_model(), callback_handler=None, retry_strategy=None,
+                 system_prompt=CHOICE_PROMPT.format(role=role, pid=pid, length=round(2 * tactics.PITCH_HALF_X, 1),
+                                                    lessons=lessons, rules=rules))
+
+
+def _choice_message(f, opts):
+    """Situation + lettered options, short."""
+    score = f.get("score") or {}
+    lines = [f"Score {score.get('home', 0)}-{score.get('away', 0)} (we are {'home' if f['attackDirection'] == '+x' else 'away'}), "
+             f"time {round(f.get('gameTime') or 0)}s of {int(tactics.MATCH_SECONDS)}, mode {f.get('mode')}. "
+             f"You are {f['distToOppGoal'] / tactics.SCALE_X:.1f} from their goal, nearest opponent "
+             f"{f['nearestOppDist'] / tactics.SCALE_X:.1f} away.", "Options:"]
+    for letter, o in zip("ABCD", opts):
+        c, i = o["cmd"][0], o["info"]
+        if c["commandType"] == "PASS":
+            lines.append(f"{letter}) {c['parameters']['type']} pass to {i['to']}: dist {i['dist']}, lane {i['lane']}, "
+                         f"receiverFree {i['receiverFree']}, gain {i['gain']}")
+        else:
+            lines.append(f"{letter}) dribble forward: gain {i['gain']}, nearest opponent {i['nearestOpp']}")
+    return "\n".join(lines)
+
+
+def _pick(raw, opts):
+    """First A-D letter in the reply -> that option, else None."""
+    for ch in (raw or "").strip().upper()[:6]:
+        if ch in "ABCD"[:len(opts)]:
+            return opts["ABCD".index(ch)]
+    return None
 
 
 def _new_agent(role, pid):
@@ -255,7 +332,42 @@ async def decide(game_state, team_id, pid):
     # Final without the model: the goalkeeper, shots, and clearing our own box.
     hard = f and (not USE_MODEL or pid == 0 or fallback[0]["commandType"] == "SHOOT"
                   or (f["hasBall"] and f.get("inOwnBox")))
-    if f and not hard:
+    opts = tactics.candidates(game_state, team_id, pid) if (CHOICE and f) else []
+    if len(opts) >= 2:
+        # Nova Micro favours letter B (21 of 39 test picks): shuffle so the bias doesn't always
+        # land on the same kind of action.
+        opts = random.sample(opts, len(opts))
+    choice = None
+    if len(opts) >= 2:
+        agent = None
+        try:
+            if not _inflight.acquire(blocking=False):
+                raise _Busy()
+            try:
+                agent = _new_choice_agent(f["role"], pid)
+                fut = _POOL.submit(_ask_llm, agent, _choice_message(f, opts))
+            except BaseException:
+                _inflight.release()
+                raise
+            raw = await asyncio.wait_for(asyncio.wrap_future(fut), TIMEOUT_S)
+            opt = _pick(raw, opts)
+            if opt is None:
+                source = "fallback_invalid"
+            elif not tactics.allowed(game_state, team_id, pid, opt["cmd"][0]):
+                source = "override_" + opt["cmd"][0]["commandType"].lower()
+            else:
+                source, out, choice = "llm_choice", opt["cmd"], opt["label"]
+        except asyncio.TimeoutError:
+            source = "fallback_timeout"
+            try:
+                agent.cancel()
+            except Exception:
+                pass
+        except _Busy:
+            source = "fallback_busy"
+        except Exception as e:
+            source = f"fallback_error:{type(e).__name__}"
+    elif f and not hard:
         msg = json.dumps({"FACTS": f, "SUGGESTION": fallback[0],
                           "COACH": tactics.coach_messages(game_state.get("teamChat"), team_id)[-1:]})
         agent = None
@@ -289,6 +401,7 @@ async def decide(game_state, team_id, pid):
     log.info(json.dumps({"pid": pid, "src": source, "ms": round((time.perf_counter() - t0) * 1000),
                          "cmd": out[0]["commandType"], "tick": game_state.get("tick"),
                          "params": out[0].get("parameters"), **_where(game_state, team_id, pid),
+                         **({"options": [o["label"] for o in opts], "choice": choice} if opts else {}),
                          "raw": (raw or "")[:120]}))
     return out
 
