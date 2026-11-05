@@ -15,20 +15,25 @@ from state import _is_my_team, _player_idx
 
 HALF_X, HALF_Y = 55.0, 35.0     # the pitch our rules are tuned for (the documented one)
 
-# The live pitch is shorter than documented: in real matches the ball stays within x +-7 and
-# goals go in at x ~ -7 / +7 (match logs 2026-11-05). We scale x up to the documented pitch on
-# the way in and scale MOVE_TO x back down on the way out, so every distance in this file
-# keeps its meaning. y is left alone (players reach |y| 14 live). PITCH_HALF_X=55 = no scaling.
+# The live pitch is ~8x smaller than documented in BOTH directions. 132 live turns at 1-decimal
+# precision (memory team's stored summaries, 2026-11-05): every player and the ball stayed within
+# x -6.9..6.6 and y -3.5..3.6. We scale positions up to the documented pitch on the way in and
+# scale MOVE_TO targets back down on the way out, so every distance in this file keeps its
+# meaning. PITCH_HALF_X=55 (simulator/tests) = no scaling; PITCH_HALF_Y follows the same ratio.
 PITCH_HALF_X = float(os.getenv("PITCH_HALF_X", "7.0"))
+PITCH_HALF_Y = float(os.getenv("PITCH_HALF_Y", str(HALF_Y * PITCH_HALF_X / HALF_X)))   # ~4.45 live
 SCALE_X = HALF_X / PITCH_HALF_X
+SCALE_Y = HALF_Y / PITCH_HALF_Y
 
 
 def _scale_state(gs):
-    """Copy of the game state with every x (positions, velocities) on the documented scale."""
-    if SCALE_X == 1.0 or not gs:
+    """Copy of the game state with every x and y (positions, velocities) on the documented scale."""
+    if (SCALE_X == 1.0 and SCALE_Y == 1.0) or not gs:
         return gs
     def sx(d):
-        return dict(d, x=d.get("x", 0.0) * SCALE_X) if isinstance(d, dict) else d
+        if not isinstance(d, dict):
+            return d
+        return dict(d, x=d.get("x", 0.0) * SCALE_X, y=d.get("y", 0.0) * SCALE_Y)
     out = dict(gs)
     ball = dict(gs.get("ball") or {})
     for k in ("position", "velocity"):
@@ -42,6 +47,10 @@ def _scale_state(gs):
 
 def _real_x(x):
     return x / SCALE_X
+
+
+def _real_y(y):
+    return y / SCALE_Y
 # Formation. Roles come from the player id the server sends, not the agent folder name.
 #   1-2-1: 0 GK, 1 DEF, 2 MID (left), 3 MID (right), 4 FWD (centre)
 #   1-1-2: 0 GK, 1 DEF, 2 MID (centre), 3 FWD (left), 4 FWD (right)
@@ -65,7 +74,7 @@ PRESSURE_DIST = 4.0      # an opponent this close = under pressure
 SPRINT_MIN_STAMINA = 0.35
 
 # Score/clock awareness. Set MATCH_SECONDS=120 if matches turn out to be 2 minutes.
-MATCH_SECONDS = float(os.getenv("MATCH_SECONDS", "300"))
+MATCH_SECONDS = float(os.getenv("MATCH_SECONDS", "120"))   # live matches end at ~120 s (logs)
 LATE_FRACTION = 0.2      # last 20% of the match counts as "late"
 CHASE_SHOOT_BONUS = 8.0  # shoot from further when chasing a goal
 
@@ -257,6 +266,7 @@ class View:
     def c(self, kind, **params):
         if kind == "MOVE_TO" and "target_x" in params:            # documented scale -> live pitch
             params["target_x"] = round(_real_x(params["target_x"]), 2)
+            params["target_y"] = round(_real_y(params["target_y"]), 2)
         return [cmd(kind, self.team_id, self.pid, **params)]
 
     def fwd(self, x):
@@ -629,11 +639,13 @@ def facts(game_state, team_id, player_id):
         "mode": v.mode,                    # normal | chase (need a goal) | protect (keep the lead)
         # Positions so the model can judge where to move and whom to mark. Rounded to keep it short.
         # Positions on the LIVE pitch (what the model must answer in).
-        "me": [round(_real_x(me[0]), 1), round(me[1], 1)],
-        "ball": [round(_real_x(v.ball[0]), 1), round(v.ball[1], 1)],
-        "mates": {i: [round(_real_x(_pos(p)[0]), 1), round(_pos(p)[1], 1)] for i, p in sorted(v.mates.items()) if i != v.pid},
-        "opps": {i: [round(_real_x(_pos(p)[0]), 1), round(_pos(p)[1], 1)] for i, p in sorted(v.opps.items())},
+        # 2 decimals: 1 live x unit is ~8 m on the documented pitch, so whole numbers hide a lot.
+        "me": [round(_real_x(me[0]), 2), round(_real_y(me[1]), 2)],
+        "ball": [round(_real_x(v.ball[0]), 2), round(_real_y(v.ball[1]), 2)],
+        "mates": {i: [round(_real_x(_pos(p)[0]), 2), round(_real_y(_pos(p)[1]), 2)] for i, p in sorted(v.mates.items()) if i != v.pid},
+        "opps": {i: [round(_real_x(_pos(p)[0]), 2), round(_real_y(_pos(p)[1]), 2)] for i, p in sorted(v.opps.items())},
         "pitchHalfLengthX": PITCH_HALF_X,
+        "pitchHalfWidthY": round(PITCH_HALF_Y, 2),
         "inOwnBox": _d(me, v.my_goal) < OWN_BOX,
         "score": game_state.get("score", {}),
         "gameTime": game_state.get("gameTime", 0),

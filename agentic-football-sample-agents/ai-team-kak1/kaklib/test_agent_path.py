@@ -273,4 +273,16 @@ for p in cl["players"]:
 c = t.decide(cl, 0, 1)[0]
 check("DEF in our box with a free mate outside: lofted pass to him",
       c["commandType"] == "PASS" and c["parameters"]["target_player_id"] == 2)
+# 5b. "duration" written inside parameters is moved up, not rejected
+d = raw('[{"commandType":"PASS","playerId":1,"parameters":{"target_player_id":2,"type":"GROUND","duration":0}}]', True, 1)
+check("PASS with duration inside parameters accepted", d and "duration" not in d[0]["parameters"] and d[0]["duration"] == 0)
+
+
+# 6. live match length: protect/chase run in the last 20% of a 120 s match
+m = state(holder=3)
+m["score"] = {"home": 1, "away": 0}
+m["gameTime"] = 100
+check(f"winning at 100 s of {t.MATCH_SECONDS:.0f} s: protect", t.MATCH_SECONDS != 120 or t.View(m, 0, 3).mode == "protect")
+m["gameTime"] = 60
+check("winning at 60 s: normal", t.MATCH_SECONDS != 120 or t.View(m, 0, 3).mode == "normal")
 print(f"\n{passed} checks passed")

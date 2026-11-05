@@ -3,6 +3,7 @@
 """
 import os, sys
 os.environ.setdefault("PITCH_HALF_X", "55")   # the simulator uses the documented pitch
+os.environ.setdefault("MATCH_SECONDS", "300")  # and 5-minute matches
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, "..", "lib"))
 sys.path.insert(0, os.path.join(_here, "kaklib"))

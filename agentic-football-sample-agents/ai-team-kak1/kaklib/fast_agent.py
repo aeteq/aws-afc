@@ -70,7 +70,7 @@ SHOOT{{aim_location:"TL"|"TR"|"BL"|"BR",power:0.0-1.0}}
 PRESS_BALL{{intensity:0.0-1.0}}
 MARK{{target_player_id:opponent id 1-4,tightness:"TIGHT"|"LOOSE"}}
 INTERCEPT{{aggressive:true|false}}
-Pitch x -{half}..{half} (goals at the two ends), y -35..35. FACTS has positions: me, ball, mates and opps as id: [x, y].
+Pitch x -{half}..{half} (goals at the two ends), y -{half_y}..{half_y}. FACTS has positions: me, ball, mates and opps as id: [x, y].
 You attack toward FACTS.attackDirection.
 Reply with ONLY a JSON array of one command, e.g.
 [{{"commandType":"MOVE_TO","playerId":{pid},"parameters":{{"target_x":20,"target_y":5,"sprint":true}}}}]"""
@@ -103,7 +103,7 @@ def _new_agent(role, pid):
     from strands import Agent
     # New Agent per call = no history (stateless, small prompt, safe under parallel calls).
     return Agent(model=_get_model(), callback_handler=None, retry_strategy=None,
-                 system_prompt=BASE_PROMPT.format(role=role, pid=pid, half=tactics.PITCH_HALF_X,
+                 system_prompt=BASE_PROMPT.format(role=role, pid=pid, half=tactics.PITCH_HALF_X, half_y=round(tactics.PITCH_HALF_Y, 2),
                                                   role_notes=ROLE_NOTES.get(role, "")))
 
 
@@ -131,7 +131,7 @@ _OPP = lambda v: isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 4 
 # Commands the MODEL may send: the ones the prompt offers, every parameter required.
 # (The GK never asks the model; tactics code sends GK_DISTRIBUTE etc. directly.)
 PARAMS = {
-    "MOVE_TO": ({"target_x": _num(-55, 55), "target_y": _num(-35, 35), "sprint": _BOOL}, {}),
+    "MOVE_TO": ({"target_x": _num(-55, 55), "target_y": _num(-35, 35), "sprint": _BOOL}, {}),   # +-documented (covers live)
     "PASS": ({"target_player_id": _MATE, "type": _one_of("GROUND", "AERIAL", "THROUGH")}, {}),
     "SHOOT": ({"aim_location": _one_of("TL", "TR", "BL", "BR", "CENTER"), "power": _num(0, 1)}, {}),
     "PRESS_BALL": ({"intensity": _num(0, 1)}, {}),
@@ -171,6 +171,13 @@ def _validate(raw_cmd, team_id, pid, has_ball):
     if raw_cmd.get("playerId", pid) != pid:
         return None                                      # the model wrote someone else's id
     c = dict(raw_cmd, playerId=pid, teamId=team_id)
+    params = c.get("parameters")
+    if isinstance(params, dict) and "duration" in params:
+        # Harmless slip seen live (15 of 85 rejected replies): "duration" written inside parameters.
+        params = dict(params)
+        d = params.pop("duration")
+        c["parameters"] = params
+        c.setdefault("duration", d if isinstance(d, int) and not isinstance(d, bool) else 0)
     try:
         c = Command(**c).model_dump(exclude_none=True)
     except ValidationError:
